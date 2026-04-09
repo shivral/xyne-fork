@@ -1,0 +1,189 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: xyne-app
+  namespace: xyne
+spec:
+  selector:
+    app: xyne-app
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+    - name: metrics
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xyne-app
+  namespace: xyne
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xyne-app
+  template:
+    metadata:
+      labels:
+        app: xyne-app
+      annotations:
+        proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: storage-init
+          image: busybox
+          securityContext:
+            runAsUser: 0
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /app-uploads /app-logs /app-migrations /app-downloads
+              chown -R 1000:1000 /app-uploads /app-logs /app-migrations /app-downloads
+              chmod 755 /app-uploads /app-logs /app-migrations /app-downloads
+          volumeMounts:
+            - name: app-uploads
+              mountPath: /app-uploads
+            - name: app-logs
+              mountPath: /app-logs
+            - name: app-migrations
+              mountPath: /app-migrations
+            - name: app-downloads
+              mountPath: /app-downloads
+      containers:
+        - name: xyne-app
+          image: xynehq/xyne:latest
+          env:
+            - name: ENCRYPTION_KEY
+              value: "Mn/oXPQn5CfCGEVTkguyxJHyo/hs6kB1AjylWzwINSg="
+            - name: SERVICE_ACCOUNT_ENCRYPTION_KEY
+              value: "Yz2+nTJWOwSc3NFRPqEEvYzOi85E/Eeg72wdZVZPTR8="
+            - name: JWT_SECRET
+              value: "dummy-jwt-secret-change-in-production"
+            - name: USER_SECRET
+              value: "dummy-user-secret"
+            - name: ACCESS_TOKEN_SECRET
+              value: "e+xRTwiC4mHYWLPEBZELBOD3UCtcmSLu+XbDt/UVVK8="
+            - name: REFRESH_TOKEN_SECRET
+              value: "UzUPNz3ey/86+5IqEkCUPDK7PHC/wwl2leK3oUzVQeY="
+          ports:
+            - containerPort: 3000
+              name: http
+            - containerPort: 3001
+              name: metrics
+          volumeMounts:
+            - name: app-uploads
+              mountPath: /usr/src/app/server/storage
+            - name: app-logs
+              mountPath: /usr/src/app/server/logs
+            - name: app-assets
+              mountPath: /usr/src/app/server/dist/assets/videos
+            - name: app-migrations
+              mountPath: /usr/src/app/server/migrations
+            - name: app-downloads
+              mountPath: /usr/src/app/server/downloads
+            - name: xyne-env-file
+              mountPath: /usr/src/app/server/.env
+              subPath: .env
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+          resources:
+            requests:
+              cpu: 2000m
+              memory: 4Gi
+            limits:
+              cpu: 16000m
+              memory: 32Gi
+      volumes:
+        - name: app-uploads
+          persistentVolumeClaim:
+            claimName: app-uploads-pvc
+        - name: app-logs
+          persistentVolumeClaim:
+            claimName: app-logs-pvc
+        - name: app-assets
+          persistentVolumeClaim:
+            claimName: app-assets-pvc
+        - name: app-migrations
+          persistentVolumeClaim:
+            claimName: app-migrations-pvc
+        - name: app-downloads
+          persistentVolumeClaim:
+            claimName: app-downloads-pvc
+        - name: xyne-env-file
+          configMap:
+            name: xyne-env-file
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-uploads-pvc
+  namespace: xyne
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-logs-pvc
+  namespace: xyne
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-assets-pvc
+  namespace: xyne
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-migrations-pvc
+  namespace: xyne
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-downloads-pvc
+  namespace: xyne
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi

@@ -1,0 +1,76 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: xyne-app
+  namespace: xyne
+spec:
+  host: xyne-app
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1000
+        connectTimeout: 30s
+      http:
+        http1MaxPendingRequests: 1000
+        http2MaxRequests: 1000
+        idleTimeout: 300s
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: xyne-app-sync
+  namespace: xyne
+spec:
+  host: xyne-app-sync
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+        connectTimeout: 30s
+      http:
+        http1MaxPendingRequests: 200
+        http2MaxRequests: 200
+        idleTimeout: 300s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: xyne-db
+  namespace: xyne
+spec:
+  host: xyne-db
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 10s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: vespa
+  namespace: xyne
+spec:
+  host: vespa
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+        connectTimeout: 10s
+      http:
+        http1MaxPendingRequests: 200
+        http2MaxRequests: 200
+        idleTimeout: 120s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Sidecar
+metadata:
+  name: default
+  namespace: xyne
+spec:
+  outboundTrafficPolicy:
+    mode: ALLOW_ANY

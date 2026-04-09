@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: xyne-app-sync
+  namespace: xyne
+spec:
+  selector:
+    app: xyne-app-sync
+  ports:
+    - name: http
+      port: 3010
+      targetPort: 3010
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xyne-app-sync
+  namespace: xyne
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xyne-app-sync
+  template:
+    metadata:
+      labels:
+        app: xyne-app-sync
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: xyne-app-sync
+          image: xynehq/xyne:latest
+          command: ["bun", "run", "dev:sync"]
+          ports:
+            - containerPort: 3010
+              name: http
+          envFrom:
+            - configMapRef:
+                name: xyne-config
+          env:
+            - name: MAIN_SERVER_HOST
+              value: xyne-app
+            - name: ENCRYPTION_KEY
+              value: "Mn/oXPQn5CfCGEVTkguyxJHyo/hs6kB1AjylWzwINSg="
+            - name: SERVICE_ACCOUNT_ENCRYPTION_KEY
+              value: "Yz2+nTJWOwSc3NFRPqEEvYzOi85E/Eeg72wdZVZPTR8="
+            - name: JWT_SECRET
+              value: "dummy-jwt-secret-change-in-production"
+            - name: USER_SECRET
+              value: "dummy-user-secret"
+            - name: ACCESS_TOKEN_SECRET
+              value: "e+xRTwiC4mHYWLPEBZELBOD3UCtcmSLu+XbDt/UVVK8="
+            - name: REFRESH_TOKEN_SECRET
+              value: "UzUPNz3ey/86+5IqEkCUPDK7PHC/wwl2leK3oUzVQeY="
+          volumeMounts:
+            - name: app-uploads
+              mountPath: /usr/src/app/server/storage
+            - name: app-logs
+              mountPath: /usr/src/app/server/logs
+            - name: app-assets
+              mountPath: /usr/src/app/server/dist/assets/videos
+            - name: app-migrations
+              mountPath: /usr/src/app/server/migrations
+            - name: app-downloads
+              mountPath: /usr/src/app/server/downloads
+            - name: xyne-env-file
+              mountPath: /usr/src/app/server/.env
+              subPath: .env
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3010
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3010
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 2Gi
+            limits:
+              cpu: 8000m
+              memory: 16Gi
+      volumes:
+        - name: app-uploads
+          persistentVolumeClaim:
+            claimName: app-uploads-pvc
+        - name: app-logs
+          persistentVolumeClaim:
+            claimName: app-logs-pvc
+        - name: app-assets
+          persistentVolumeClaim:
+            claimName: app-assets-pvc
+        - name: app-migrations
+          persistentVolumeClaim:
+            claimName: app-migrations-pvc
+        - name: app-downloads
+          persistentVolumeClaim:
+            claimName: app-downloads-pvc
+        - name: xyne-env-file
+          configMap:
+            name: xyne-env-file

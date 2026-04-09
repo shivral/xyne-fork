@@ -1,0 +1,6 @@
+# istio-base Helm values
+# Installs Istio CRDs only — no control plane components
+# helm repo add istio https://istio-release.storage.googleapis.com/charts
+# helm install istio-base istio/base -n istio-system -f istio-base-values.yaml
+
+defaultRevision: default

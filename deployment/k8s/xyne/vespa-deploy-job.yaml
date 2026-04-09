@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vespa-models-pvc
+  namespace: xyne
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vespa-deploy
+  namespace: xyne
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: vespa-deploy
+          image: xyne-vespa-deploy:latest
+          env:
+            - name: VESPA_CONFIGSERVERS
+              value: "vespa"
+          volumeMounts:
+            - name: vespa-models
+              mountPath: /app/vespa/models
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      volumes:
+        - name: vespa-models
+          persistentVolumeClaim:
+            claimName: vespa-models-pvc

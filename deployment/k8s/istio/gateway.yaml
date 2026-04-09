@@ -1,0 +1,15 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: xyne-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingress  # matches Helm-installed istio-ingress pod label (not "ingressgateway")
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*"

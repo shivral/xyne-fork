@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xyne-grafana-dashboards
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+binaryData: {}
+data: {}

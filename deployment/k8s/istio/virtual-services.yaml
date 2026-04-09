@@ -1,0 +1,103 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: xyne-app
+  namespace: istio-system
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - xyne-gateway
+  http:
+    - name: health
+      match:
+        - uri:
+            exact: /health
+      route:
+        - destination:
+            host: xyne-app.xyne.svc.cluster.local
+            port:
+              number: 3000
+      timeout: 30s
+
+    - name: api
+      match:
+        - uri:
+            prefix: /api/
+      route:
+        - destination:
+            host: xyne-app.xyne.svc.cluster.local
+            port:
+              number: 3000
+      timeout: 600s
+      retries:
+        attempts: 0
+
+    - name: auth
+      match:
+        - uri:
+            prefix: /auth
+      route:
+        - destination:
+            host: xyne-app.xyne.svc.cluster.local
+            port:
+              number: 3000
+      timeout: 60s
+
+    - name: default
+      match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: xyne-app.xyne.svc.cluster.local
+            port:
+              number: 3000
+      timeout: 300s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: xyne-app-sync
+  namespace: xyne
+spec:
+  hosts:
+    - xyne-app-sync
+  http:
+    - route:
+        - destination:
+            host: xyne-app-sync
+            port:
+              number: 3010
+      timeout: 300s
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: xyne-db
+  namespace: xyne
+spec:
+  hosts:
+    - xyne-db
+  tcp:
+    - route:
+        - destination:
+            host: xyne-db
+            port:
+              number: 5432
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: vespa
+  namespace: xyne
+spec:
+  hosts:
+    - vespa
+  http:
+    - route:
+        - destination:
+            host: vespa
+            port:
+              number: 8080
+      timeout: 120s

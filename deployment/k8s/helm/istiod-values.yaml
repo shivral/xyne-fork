@@ -1,0 +1,32 @@
+pilot:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2048Mi
+    limits:
+      cpu: 2000m
+      memory: 4096Mi
+  autoscaleEnabled: false
+  replicaCount: 1
+
+global:
+  proxy:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+  tracer:
+    zipkin:
+      address: ""
+
+meshConfig:
+  enableTracing: false
+  defaultConfig:
+    proxyStatsMatcher:
+      inclusionRegexps:
+        - ".*"
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
