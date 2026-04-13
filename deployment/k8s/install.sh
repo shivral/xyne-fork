@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# GitHub repository configuration for fetching deployment files
+GITHUB_REPO="https://raw.githubusercontent.com/shivral/xyne-fork/feature/deploy-xyne-k8s-clean/deployment/k8s"
+
+# Temporary directory for downloaded manifests
+MANIFEST_DIR="/tmp/xyne-k8s-manifests"
+
 HOST_IP=$(hostname -I | awk '{print $1}')
 
 GREEN='\033[0;32m'
@@ -12,6 +17,77 @@ NC='\033[0m'
 log()  { echo -e "${GREEN}[install]${NC} $*"; }
 warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
 die()  { echo -e "${RED}[error]${NC} $*"; exit 1; }
+
+download_manifest() {
+  local path="$1"
+  local dest="$2"
+  local url="${GITHUB_REPO}/${path}"
+  
+  mkdir -p "$(dirname "$dest")"
+  log "Downloading ${path}..."
+  curl -fsSL "$url" -o "$dest" || die "Failed to download ${path}"
+}
+
+setup_manifests() {
+  log "Setting up deployment manifests..."
+  rm -rf "$MANIFEST_DIR"
+  mkdir -p "$MANIFEST_DIR"/{xyne,helm,istio,namespaces}
+  
+  # Download namespace manifests
+  download_manifest "namespaces/namespaces.yaml" "$MANIFEST_DIR/namespaces/namespaces.yaml"
+  
+  # Download xyne manifests
+  download_manifest "xyne/configmap.yaml" "$MANIFEST_DIR/xyne/configmap.yaml"
+  download_manifest "xyne/secrets.yaml" "$MANIFEST_DIR/xyne/secrets.yaml"
+  download_manifest "xyne/vespa-external-service.yaml" "$MANIFEST_DIR/xyne/vespa-external-service.yaml"
+  download_manifest "xyne/db-statefulset.yaml" "$MANIFEST_DIR/xyne/db-statefulset.yaml"
+  download_manifest "xyne/app-deployment.yaml" "$MANIFEST_DIR/xyne/app-deployment.yaml"
+  download_manifest "xyne/app-sync-deployment.yaml" "$MANIFEST_DIR/xyne/app-sync-deployment.yaml"
+  
+  # Download helm values
+  download_manifest "helm/istio-base-values.yaml" "$MANIFEST_DIR/helm/istio-base-values.yaml"
+  download_manifest "helm/istiod-values.yaml" "$MANIFEST_DIR/helm/istiod-values.yaml"
+  download_manifest "helm/istio-ingress-values.yaml" "$MANIFEST_DIR/helm/istio-ingress-values.yaml"
+  
+  # Download istio manifests
+  download_manifest "istio/destination-rules.yaml" "$MANIFEST_DIR/istio/destination-rules.yaml"
+  download_manifest "istio/gateway.yaml" "$MANIFEST_DIR/istio/gateway.yaml"
+  download_manifest "istio/virtual-services.yaml" "$MANIFEST_DIR/istio/virtual-services.yaml"
+  download_manifest "istio/peer-authentication.yaml" "$MANIFEST_DIR/istio/peer-authentication.yaml"
+  download_manifest "istio/envoy-filters.yaml" "$MANIFEST_DIR/istio/envoy-filters.yaml"
+  
+  log "All manifests downloaded to ${MANIFEST_DIR}"
+}
+
+configure_secrets() {
+  log "Checking for required secrets configuration..."
+  
+  local configmap="$MANIFEST_DIR/xyne/configmap.yaml"
+  
+  if grep -q "REPLACE_WITH_YOUR_GOOGLE_CLIENT_ID" "$configmap"; then
+    warn "═══════════════════════════════════════════════════════════"
+    warn " IMPORTANT: Configure your secrets before deployment!"
+    warn "═══════════════════════════════════════════════════════════"
+    warn ""
+    warn "The following secrets need to be configured:"
+    warn "  1. GOOGLE_CLIENT_ID"
+    warn "  2. GOOGLE_CLIENT_SECRET"
+    warn "  3. LITELLM_API_KEY"
+    warn ""
+    warn "Edit the configmap file now:"
+    warn "  ${configmap}"
+    warn ""
+    read -p "Press Enter to open the file in nano editor (or Ctrl+C to exit)..." </dev/tty
+    nano "$configmap"
+    
+    if grep -q "REPLACE_WITH_YOUR" "$configmap"; then
+      die "Secrets still contain placeholder values. Please configure them before continuing."
+    fi
+    log "Secrets configured successfully."
+  else
+    log "Secrets already configured."
+  fi
+}
 
 require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo $0"
@@ -141,23 +217,23 @@ install_istio() {
   helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
   helm repo update
 
-  kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/namespaces/namespaces.yaml"
 
   helm upgrade --install istio-base istio/base \
     -n istio-system \
-    -f "${SCRIPT_DIR}/helm/istio-base-values.yaml" \
+    -f "${MANIFEST_DIR}/helm/istio-base-values.yaml" \
     --wait
 
   helm upgrade --install istiod istio/istiod \
     -n istio-system \
-    -f "${SCRIPT_DIR}/helm/istiod-values.yaml" \
+    -f "${MANIFEST_DIR}/helm/istiod-values.yaml" \
     --wait
 
   kubectl label namespace istio-system istio-injection=enabled --overwrite
 
   helm upgrade --install istio-ingress istio/gateway \
     -n istio-system \
-    -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" \
+    -f "${MANIFEST_DIR}/helm/istio-ingress-values.yaml" \
     --wait --timeout=120s || true
 
   log "Waiting for istio-ingress pod to be ready..."
@@ -175,24 +251,24 @@ install_local_path_provisioner() {
 
 install_xyne() {
   log "Applying xyne namespace manifests..."
-  kubectl apply -f "${SCRIPT_DIR}/xyne/configmap.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/xyne/secrets.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/xyne/configmap.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/xyne/secrets.yaml"
 
   log "Patching Vespa Endpoints with host IP: ${HOST_IP}..."
   sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" \
-    "${SCRIPT_DIR}/xyne/vespa-external-service.yaml" \
+    "${MANIFEST_DIR}/xyne/vespa-external-service.yaml" \
     | kubectl apply -f -
 
-  kubectl apply -f "${SCRIPT_DIR}/xyne/db-statefulset.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/xyne/db-statefulset.yaml"
 
   log "Waiting for Postgres to be ready..."
   kubectl rollout status statefulset/xyne-db -n xyne --timeout=180s
 
   log "Applying Istio destination rules and sidecar policy before app starts..."
-  kubectl apply -f "${SCRIPT_DIR}/istio/destination-rules.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/istio/destination-rules.yaml"
 
-  kubectl apply -f "${SCRIPT_DIR}/xyne/app-deployment.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/xyne/app-sync-deployment.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/xyne/app-deployment.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/xyne/app-sync-deployment.yaml"
 
   log "Waiting for xyne-app-sync to be ready..."
   kubectl rollout status deployment/xyne-app-sync -n xyne --timeout=300s
@@ -203,10 +279,10 @@ install_xyne() {
 
 install_istio_routing() {
   log "Applying Istio routing (Gateway, VirtualServices, DestinationRules)..."
-  kubectl apply -f "${SCRIPT_DIR}/istio/gateway.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/istio/virtual-services.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/istio/peer-authentication.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/istio/gateway.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/istio/virtual-services.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/istio/peer-authentication.yaml"
+  kubectl apply -f "${MANIFEST_DIR}/istio/envoy-filters.yaml"
 
   log "Waiting 15s for istiod to program ingress gateway..."
   sleep 15
@@ -240,11 +316,16 @@ print_summary() {
     | grep -v "Completed" \
     && warn "Some pods are not Running — check above." || log "All pods Running."
   echo ""
-  warn "Before production use — update secrets.yaml with real values:"
-  warn "  kubectl apply -f ${SCRIPT_DIR}/xyne/secrets.yaml"
+  log "Deployment manifests stored in: ${MANIFEST_DIR}"
+  warn "To update secrets after deployment:"
+  warn "  1. Edit: ${MANIFEST_DIR}/xyne/configmap.yaml"
+  warn "  2. Apply: kubectl apply -f ${MANIFEST_DIR}/xyne/configmap.yaml"
+  warn "  3. Restart: kubectl rollout restart deployment/xyne-app -n xyne"
 }
 
 require_root
+setup_manifests
+configure_secrets
 install_dependencies
 install_kubeadm
 init_cluster
