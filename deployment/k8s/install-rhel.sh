@@ -24,10 +24,10 @@ install_dependencies() {
   dnf makecache
   
   log "Removing conflicting packages before update..."
-  dnf remove -y -q openssl-fips-provider-so 2>/dev/null || true
-  dnf remove -y -q containers-common 2>/dev/null || true
+  rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
+  rpm -e --nodeps containers-common 2>/dev/null || true
   
-  dnf update -y -q --allowerasing
+  dnf update -y --allowerasing --setopt=tsflags=replacefiles
   dnf install -y -q --allowerasing \
     curl \
     ca-certificates \
