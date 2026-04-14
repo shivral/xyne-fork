@@ -22,23 +22,6 @@ install_dependencies() {
   log "Cleaning dnf cache..."
   dnf clean all
   dnf makecache
-
-  log "Extracting proxy CA certificate from registry.k8s.io..."
-  openssl s_client -connect registry.k8s.io:443 -showcerts 2>/dev/null </dev/null \
-    | awk '/BEGIN CERTIFICATE/{c++} c==2{print} /END CERTIFICATE/ && c==2{exit}' \
-    > /tmp/proxy-ca.crt
-
-  if [[ -s /tmp/proxy-ca.crt ]]; then
-    log "Proxy CA cert extracted successfully:"
-    cat /tmp/proxy-ca.crt
-    cp /tmp/proxy-ca.crt /etc/pki/ca-trust/source/anchors/proxy-ca.crt
-    mkdir -p /etc/docker/certs.d/registry.k8s.io
-    cp /tmp/proxy-ca.crt /etc/docker/certs.d/registry.k8s.io/ca.crt
-    update-ca-trust extract
-    log "Proxy CA cert installed into system and Docker trust stores."
-  else
-    warn "Could not extract proxy CA cert — TLS errors may follow."
-  fi
   
   log "Removing conflicting packages before update..."
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
@@ -140,17 +123,21 @@ EOF
 init_cluster() {
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
-  log "Pre-pulling kubeadm images via Docker then importing into containerd..."
-  for image in \
-    registry.k8s.io/kube-apiserver:v1.29.0 \
-    registry.k8s.io/kube-controller-manager:v1.29.0 \
-    registry.k8s.io/kube-scheduler:v1.29.0 \
-    registry.k8s.io/kube-proxy:v1.29.0 \
-    registry.k8s.io/coredns/coredns:v1.11.1 \
-    registry.k8s.io/pause:3.9 \
-    registry.k8s.io/etcd:3.5.10-0; do
-    docker pull "$image"
-    docker save "$image" | ctr -n k8s.io images import -
+  log "Pre-pulling kubeadm images via Docker Hub mirror then importing into containerd..."
+  declare -A IMAGES=(
+    ["registry.k8s.io/kube-apiserver:v1.29.0"]="lank8s/kube-apiserver:v1.29.0"
+    ["registry.k8s.io/kube-controller-manager:v1.29.0"]="lank8s/kube-controller-manager:v1.29.0"
+    ["registry.k8s.io/kube-scheduler:v1.29.0"]="lank8s/kube-scheduler:v1.29.0"
+    ["registry.k8s.io/kube-proxy:v1.29.0"]="lank8s/kube-proxy:v1.29.0"
+    ["registry.k8s.io/coredns/coredns:v1.11.1"]="coredns/coredns:1.11.1"
+    ["registry.k8s.io/pause:3.9"]="lank8s/pause:3.9"
+    ["registry.k8s.io/etcd:3.5.10-0"]="lank8s/etcd:3.5.10-0"
+  )
+  for target in "${!IMAGES[@]}"; do
+    mirror="${IMAGES[$target]}"
+    docker pull "$mirror"
+    docker tag "$mirror" "$target"
+    docker save "$target" | ctr -n k8s.io images import -
   done
 
   kubeadm init \
