@@ -123,15 +123,15 @@ EOF
 init_cluster() {
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
-  log "Pre-pulling kubeadm images via Docker Hub mirror then importing into containerd..."
+  log "Pre-pulling kubeadm images via Docker Hub then importing into containerd..."
   declare -A IMAGES=(
-    ["registry.k8s.io/kube-apiserver:v1.29.0"]="lank8s/kube-apiserver:v1.29.0"
-    ["registry.k8s.io/kube-controller-manager:v1.29.0"]="lank8s/kube-controller-manager:v1.29.0"
-    ["registry.k8s.io/kube-scheduler:v1.29.0"]="lank8s/kube-scheduler:v1.29.0"
-    ["registry.k8s.io/kube-proxy:v1.29.0"]="lank8s/kube-proxy:v1.29.0"
-    ["registry.k8s.io/coredns/coredns:v1.11.1"]="coredns/coredns:1.11.1"
-    ["registry.k8s.io/pause:3.9"]="lank8s/pause:3.9"
-    ["registry.k8s.io/etcd:3.5.10-0"]="lank8s/etcd:3.5.10-0"
+    ["registry.k8s.io/kube-apiserver:v1.29.0"]="docker/desktop-kubernetes-apiserver:v1.29.0"
+    ["registry.k8s.io/kube-controller-manager:v1.29.0"]="docker/desktop-kubernetes-controller-manager:v1.29.0"
+    ["registry.k8s.io/kube-scheduler:v1.29.0"]="docker/desktop-kubernetes-scheduler:v1.29.0"
+    ["registry.k8s.io/kube-proxy:v1.29.0"]="docker/desktop-kubernetes-proxy:v1.29.0"
+    ["registry.k8s.io/coredns/coredns:v1.11.1"]="docker/desktop-kubernetes-coredns:v1.11.1"
+    ["registry.k8s.io/pause:3.9"]="docker/desktop-kubernetes-pause:3.9"
+    ["registry.k8s.io/etcd:3.5.10-0"]="docker/desktop-kubernetes-etcd:3.5.10-0"
   )
   for target in "${!IMAGES[@]}"; do
     mirror="${IMAGES[$target]}"
