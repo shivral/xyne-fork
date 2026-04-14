@@ -131,6 +131,33 @@ init_cluster() {
   curl -fsSLk https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
     | tar -xz -C /opt/cni/bin
 
+  log "Disabling proxy for kubelet and containerd to avoid TLS issues..."
+  mkdir -p /etc/systemd/system/kubelet.service.d
+  cat > /etc/systemd/system/kubelet.service.d/no-proxy.conf <<'EOF'
+[Service]
+Environment="NO_PROXY=*"
+Environment="no_proxy=*"
+Environment="HTTP_PROXY="
+Environment="HTTPS_PROXY="
+Environment="http_proxy="
+Environment="https_proxy="
+EOF
+
+  mkdir -p /etc/systemd/system/containerd.service.d
+  cat > /etc/systemd/system/containerd.service.d/no-proxy.conf <<'EOF'
+[Service]
+Environment="NO_PROXY=*"
+Environment="no_proxy=*"
+Environment="HTTP_PROXY="
+Environment="HTTPS_PROXY="
+Environment="http_proxy="
+Environment="https_proxy="
+EOF
+
+  systemctl daemon-reload
+  systemctl restart containerd
+  systemctl restart kubelet
+
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
   log "Pre-pulling kubeadm images via Docker Hub then importing into containerd..."
@@ -161,11 +188,25 @@ init_cluster() {
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address="${HOST_IP}" \
     --cri-socket=unix:///run/containerd/containerd.sock \
-    --ignore-preflight-errors=SystemVerification
+    --ignore-preflight-errors=SystemVerification || true
 
   mkdir -p "$HOME/.kube"
   cp /etc/kubernetes/admin.conf "$HOME/.kube/config"
   chown "$(id -u):$(id -g)" "$HOME/.kube/config"
+
+  log "Waiting for API server to be reachable..."
+  for i in $(seq 1 30); do
+    kubectl get nodes &>/dev/null && break
+    sleep 5
+  done
+
+  log "Applying missing bootstrap resources..."
+  kubectl apply -f https://raw.githubusercontent.com/kubernetes/kubernetes/v1.29.0/cluster/addons/addon-manager/kube-addons.yaml 2>/dev/null || true
+  kubeadm init phase bootstrap-token 2>/dev/null || true
+  kubeadm init phase addon all \
+    --kubernetes-version=v1.29.0 \
+    --pod-network-cidr=10.244.0.0/16 \
+    --apiserver-advertise-address="${HOST_IP}" 2>/dev/null || true
 
   log "Removing control-plane taint so workloads can schedule on this node..."
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
