@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Environment Setup ---
-# Explicitly export proxy variables just in case sudo -E misses them
+# --- 1. PROXY & ENVIRONMENT SETUP ---
 export http_proxy="${http_proxy:-}"
 export https_proxy="${https_proxy:-}"
-export no_proxy="${no_proxy:-localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16}"
+export no_proxy="localhost,127.0.0.1,${no_proxy:-},10.96.0.0/12,10.244.0.0/16"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_IP=$(hostname -I | awk '{print $1}')
@@ -23,25 +22,21 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0"
 }
 
-# --- 1. System Prep & Conflict Resolution ---
+# --- 2. SYSTEM DEPENDENCIES & CONFLICT RESOLUTION ---
 install_dependencies() {
-  log "Applying Hostname fix to /etc/hosts..."
+  log "Fixing local hostname resolution..."
   if ! grep -q "$(hostname)" /etc/hosts; then
     echo "127.0.0.1 $(hostname)" >> /etc/hosts
   fi
 
-  log "Removing conflicting OpenSSL FIPS provider..."
+  log "Handling OpenSSL FIPS provider file conflict..."
+  # Resolves the 'fips.so' transaction test error from your first screenshot
   dnf remove -y openssl-fips-provider-so --allowerasing || true
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
 
-  log "Cleaning dnf cache..."
-  dnf clean all
-  dnf makecache
-  
-  log "Updating system with force-overwrite allowed..."
+  log "Updating dnf and installing base utilities..."
+  dnf clean all && dnf makecache
   dnf update -y --allowerasing --setopt=tsflags=replacefiles
-  
-  log "Installing utilities..."
   dnf install -y -q --allowerasing --setopt=tsflags=replacefiles \
     curl ca-certificates gnupg socat conntrack ipset iproute-tc yum-utils device-mapper-persistent-data lvm2
 
@@ -50,7 +45,7 @@ install_dependencies() {
   dnf install -y --allowerasing --best --setopt=install_weak_deps=False --setopt=tsflags=replacefiles \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  log "Configuring Proxy for containerd service..."
+  log "Configuring Systemd Proxy for Containerd..."
   mkdir -p /etc/systemd/system/containerd.service.d
   cat <<EOF > /etc/systemd/system/containerd.service.d/http-proxy.conf
 [Service]
@@ -59,33 +54,38 @@ Environment="HTTPS_PROXY=${https_proxy}"
 Environment="NO_PROXY=localhost,127.0.0.1,${HOST_IP},10.96.0.0/12,10.244.0.0/16,$(hostname)"
 EOF
 
-  systemctl daemon-reload
-  systemctl enable --now containerd
-
-  log "Configuring containerd (SystemdCgroup + SSL/TLS Bypass)..."
+  log "Applying Containerd configuration with TLS Bypass path..."
   mkdir -p /etc/containerd
-  # Generate default config
   containerd config default > /etc/containerd/config.toml
-  
-  # 1. Enable SystemdCgroup
   sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-  
-  # 2. FIX: Bypass x509/TLS verification for registries (Fixes your current error)
-  # We append these to the end of the config to override registry behavior
-  cat <<EOF >> /etc/containerd/config.toml
+  # Point to certs directory for SSL/x509 bypass
+  sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|' /etc/containerd/config.toml
 
-[plugins."io.containerd.grpc.v1.cri".registry.configs."registry.k8s.io".tls]
-  insecure_skip_verify = true
-[plugins."io.containerd.grpc.v1.cri".registry.configs."docker.io".tls]
-  insecure_skip_verify = true
+  log "Creating Registry SSL overrides (Fixes x509 Unknown Authority)..."
+  # Override for Kubernetes Registry
+  mkdir -p /etc/containerd/certs.d/registry.k8s.io
+  cat <<EOF > /etc/containerd/certs.d/registry.k8s.io/hosts.toml
+server = "https://registry.k8s.io"
+[host."https://registry.k8s.io"]
+  skip_verify = true
 EOF
 
+  # Override for Docker Hub
+  mkdir -p /etc/containerd/certs.d/docker.io
+  cat <<EOF > /etc/containerd/certs.d/docker.io/hosts.toml
+server = "https://registry-1.docker.io"
+[host."https://registry-1.docker.io"]
+  skip_verify = true
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now containerd
   systemctl restart containerd
 }
 
-# --- 2. Kubernetes Setup ---
+# --- 3. KUBERNETES INSTALLATION ---
 install_kubeadm() {
-  log "Installing K8s binaries (v1.29)..."
+  log "Installing K8s binaries (v1.29) with SSL/GPG bypass..."
   cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
 name=Kubernetes
@@ -109,8 +109,7 @@ EOF
 overlay
 br_netfilter
 EOF
-  modprobe overlay
-  modprobe br_netfilter
+  modprobe overlay && modprobe br_netfilter
 
   cat > /etc/sysctl.d/k8s.conf <<EOF
 net.bridge.bridge-nf-call-iptables  = 1
@@ -124,13 +123,13 @@ EOF
   systemctl enable --now kubelet
 }
 
-# --- 3. Cluster Initialization ---
+# --- 4. CLUSTER INITIALIZATION ---
 init_cluster() {
-  log "Pre-pulling Kubernetes images (Now bypassing TLS verification)..."
-  # This command should now succeed without the x509 error
+  log "Pre-pulling images with TLS bypass active..."
+  # If this succeeds, the x509 error is resolved
   kubeadm config images pull --cri-socket=unix:///run/containerd/containerd.sock
 
-  log "Initializing Cluster..."
+  log "Initializing Cluster at ${HOST_IP}..."
   kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address="${HOST_IP}" \
@@ -140,19 +139,21 @@ init_cluster() {
   cp /etc/kubernetes/admin.conf "$HOME/.kube/config"
   chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 
+  log "Untainting control-plane..."
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 }
 
-# --- 4. CNI, Helm, & Storage ---
+# --- 5. NETWORKING & STORAGE ---
 install_cni() {
   log "Installing Flannel CNI..."
+  # -k bypasses curl SSL issues
   curl -sSL -k https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml | kubectl apply -f -
-  log "Waiting for node Ready..."
-  kubectl wait --for=condition=Ready node --all --timeout=180s
+  log "Waiting for Node Ready..."
+  kubectl wait --for=condition=Ready node --all --timeout=120s
 }
 
 install_helm() {
-  log "Installing Helm..."
+  log "Installing Helm 3..."
   curl -fsSL -k https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
   export PATH="/usr/local/bin:$PATH"
 }
@@ -163,9 +164,9 @@ install_local_path_provisioner() {
   kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 }
 
-# --- 5. Application Services ---
+# --- 6. VESPA & ISTIO ---
 start_vespa() {
-  log "Starting Vespa..."
+  log "Starting Vespa container..."
   if docker ps --format '{{.Names}}' | grep -q '^vespa$'; then
     log "Vespa already running."
   else
@@ -189,27 +190,42 @@ install_istio() {
   helm upgrade --install istio-ingress istio/gateway -n istio-system -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" --wait --timeout=120s || true
 }
 
+# --- 7. APP DEPLOYMENT (XYNE) ---
 install_xyne() {
-  log "Deploying Xyne..."
+  log "Deploying Xyne Namespace components..."
   kubectl apply -f "${SCRIPT_DIR}/xyne/configmap.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/secrets.yaml"
+
+  log "Patching Vespa service with Host IP..."
   sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" "${SCRIPT_DIR}/xyne/vespa-external-service.yaml" | kubectl apply -f -
+  
   kubectl apply -f "${SCRIPT_DIR}/xyne/db-statefulset.yaml"
   kubectl rollout status statefulset/xyne-db -n xyne --timeout=180s
+
   kubectl apply -f "${SCRIPT_DIR}/istio/destination-rules.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/app-deployment.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/app-sync-deployment.yaml"
 }
 
 install_istio_routing() {
-  log "Applying Istio Routing..."
+  log "Applying Mesh Routing policies..."
   kubectl apply -f "${SCRIPT_DIR}/istio/gateway.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/virtual-services.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/peer-authentication.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
 }
 
-# --- Execution ---
+# --- 8. SUMMARY ---
+print_summary() {
+  INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
+  echo ""
+  log "=========================================="
+  log "  DEPLOYMENT COMPLETE"
+  log "  Endpoint: http://${HOST_IP}:${INGRESS_PORT}/"
+  log "=========================================="
+}
+
+# --- EXECUTION FLOW ---
 require_root
 install_dependencies
 install_kubeadm
@@ -221,6 +237,4 @@ start_vespa
 install_istio
 install_xyne
 install_istio_routing
-
-INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
-log "SUCCESS! Endpoint: http://${HOST_IP}:${INGRESS_PORT}/"
+print_summary
