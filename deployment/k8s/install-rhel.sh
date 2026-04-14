@@ -2,10 +2,9 @@
 set -euo pipefail
 
 # --- 1. PROXY & ENVIRONMENT ---
-# We force these into the environment for every sub-shell
 export http_proxy="${http_proxy:-}"
 export https_proxy="${https_proxy:-}"
-export no_proxy="localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16,$(hostname),$(hostname -I | tr ' ' ',')"
+export no_proxy="localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16,$(hostname)"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_IP=$(hostname -I | awk '{print $1}')
@@ -23,30 +22,18 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0"
 }
 
-# --- 2. PRE-FLIGHT CONNECTIVITY CHECK ---
-check_connectivity() {
-  log "Testing proxy connectivity to Kubernetes registry..."
-  # Use -k to ignore SSL for this check. If this fails, IT is blocking the URL.
-  if ! curl -Is -k --connect-timeout 5 https://registry.k8s.io/v2/ > /dev/null; then
-    die "Proxy cannot reach registry.k8s.io. Check your proxy settings or IT firewall."
-  fi
-  log "Connectivity test passed."
-}
-
-# --- 3. SYSTEM PREP & CONFLICTS ---
+# --- 2. SYSTEM DEPENDENCIES & CONFLICTS ---
 install_dependencies() {
-  log "Fixing local hostname and crypto-policies..."
+  log "Fixing local hostname resolution..."
   if ! grep -q "$(hostname)" /etc/hosts; then
     echo "127.0.0.1 $(hostname)" >> /etc/hosts
   fi
-  # Allows RHEL to accept certificates from older/corporate proxies
-  update-crypto-policies --set DEFAULT:AD-SIGS || true
 
-  log "Removing conflicting OpenSSL FIPS provider..."
+  log "Handling OpenSSL FIPS provider conflict..."
   dnf remove -y openssl-fips-provider-so --allowerasing || true
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
 
-  log "Updating dnf cache and system..."
+  log "Updating dnf and installing base utilities..."
   dnf clean all && dnf makecache
   dnf update -y --allowerasing --setopt=tsflags=replacefiles
   dnf install -y -q --allowerasing --setopt=tsflags=replacefiles \
@@ -57,44 +44,31 @@ install_dependencies() {
   dnf install -y --allowerasing --setopt=tsflags=replacefiles \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  log "Setting up Containerd Systemd Proxy..."
-  mkdir -p /etc/systemd/system/containerd.service.d
-  cat <<EOF > /etc/systemd/system/containerd.service.d/http-proxy.conf
+  log "Configuring Proxy for Docker & Containerd..."
+  # Both services need the proxy settings to reach the registry
+  for svc in docker containerd; do
+    mkdir -p /etc/systemd/system/${svc}.service.d
+    cat <<EOF > /etc/systemd/system/${svc}.service.d/http-proxy.conf
 [Service]
 Environment="HTTP_PROXY=${http_proxy}"
 Environment="HTTPS_PROXY=${https_proxy}"
 Environment="NO_PROXY=${no_proxy}"
 EOF
+  done
 
-  log "WRITING DEFINITIVE CONTAINERD CONFIG (FORCE TLS BYPASS)..."
+  log "Configuring Containerd for Kubernetes (SystemdCgroup)..."
   mkdir -p /etc/containerd
-  # We use Version 2 syntax which is strict on indentation.
-  cat <<EOF > /etc/containerd/config.toml
-version = 2
-[plugins]
-  [plugins."io.containerd.grpc.v1.cri"]
-    [plugins."io.containerd.grpc.v1.cri".containerd]
-      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
-        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
-          runtime_type = "io.containerd.runc.v2"
-          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
-            SystemdCgroup = true
-    [plugins."io.containerd.grpc.v1.cri".registry]
-      [plugins."io.containerd.grpc.v1.cri".registry.configs]
-        [plugins."io.containerd.grpc.v1.cri".registry.configs."registry.k8s.io".tls]
-          insecure_skip_verify = true
-        [plugins."io.containerd.grpc.v1.cri".registry.configs."docker.io".tls]
-          insecure_skip_verify = true
-EOF
+  containerd config default > /etc/containerd/config.toml
+  sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
 
   systemctl daemon-reload
-  systemctl enable --now containerd
-  systemctl restart containerd
+  systemctl enable --now docker containerd
+  systemctl restart docker containerd
 }
 
-# --- 4. KUBERNETES INSTALL ---
+# --- 3. KUBERNETES INSTALLATION ---
 install_kubeadm() {
-  log "Installing K8s binaries..."
+  log "Installing K8s binaries (v1.29)..."
   cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
 name=Kubernetes
@@ -109,10 +83,6 @@ EOF
   
   swapoff -a
   sed -i '/swap/d' /etc/fstab
-  cat > /etc/modules-load.d/k8s.conf <<EOF
-overlay
-br_netfilter
-EOF
   modprobe overlay && modprobe br_netfilter
   cat > /etc/sysctl.d/k8s.conf <<EOF
 net.bridge.bridge-nf-call-iptables  = 1
@@ -125,19 +95,28 @@ EOF
   systemctl enable --now kubelet
 }
 
-# --- 5. CLUSTER INITIALIZATION ---
+# --- 4. THE DOCKER MULE BYPASS ---
 init_cluster() {
-  log "PRE-PULLING IMAGES (If this hangs, the Proxy is dropping the connection)..."
+  log "Cleaning previous attempts..."
   kubeadm reset -f || true
-  
-  # We use a longer timeout and explicit socket to force the new config to load
-  if ! kubeadm config images pull --cri-socket=unix:///run/containerd/containerd.sock; then
-    warn "The bypass didn't work. Trying to manually pull 'pause' image as a test..."
-    # Attempting to pull the most basic image via containerd's CLI directly
-    crictl pull registry.k8s.io/pause:3.9 || die "CRICTL failed. IT is likely blocking HTTPS Head requests."
-  fi
 
-  log "Initializing Cluster..."
+  log "Starting Docker Image Sideload (Bypassing Containerd SSL errors)..."
+  # Dynamically get the required images for this version
+  K8S_IMAGES=$(kubeadm config images list --kubernetes-version v1.29.15)
+  
+  for img in $K8S_IMAGES; do
+    log "Docker pulling: $img"
+    # Docker is more likely to succeed with proxy environment variables
+    if docker pull "$img"; then
+        log "Transferring $img to Containerd (k8s.io namespace)..."
+        # We pipe the save output directly to the import command
+        docker save "$img" | ctr -n k8s.io images import -
+    else
+        warn "Docker failed to pull $img. Check your proxy settings."
+    fi
+  done
+
+  log "Initializing Cluster (Images are now local)..."
   kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address="${HOST_IP}" \
@@ -149,7 +128,7 @@ init_cluster() {
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 }
 
-# --- 6. INFRA & APPS ---
+# --- 5. INFRASTRUCTURE & APPS ---
 install_cni() {
   log "Installing Flannel CNI..."
   curl -sSL -k https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml | kubectl apply -f -
@@ -159,6 +138,7 @@ install_cni() {
 install_helm() {
   log "Installing Helm..."
   curl -fsSL -k https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
+  export PATH="/usr/local/bin:$PATH"
 }
 
 install_local_path_provisioner() {
@@ -168,14 +148,15 @@ install_local_path_provisioner() {
 }
 
 start_vespa() {
-  log "Starting Vespa..."
+  log "Starting Vespa container..."
+  # Clean up existing vespa if present
   docker ps -a --format '{{.Names}}' | grep -q "^vespa$" && docker rm -f vespa || true
   docker run -d --name vespa --hostname vespa-container --restart always \
     -p 8080:8080 -p 8081:8081 -p 19071:19071 vespaengine/vespa
 }
 
 install_istio() {
-  log "Installing Istio..."
+  log "Installing Istio Service Mesh..."
   helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
   helm repo update
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
@@ -198,16 +179,15 @@ install_xyne() {
 }
 
 install_istio_routing() {
-  log "Applying Routing Rules..."
+  log "Applying Mesh Routing..."
   kubectl apply -f "${SCRIPT_DIR}/istio/gateway.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/virtual-services.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/peer-authentication.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
 }
 
-# --- 7. EXECUTION ---
+# --- MAIN EXECUTION ---
 require_root
-check_connectivity
 install_dependencies
 install_kubeadm
 init_cluster
