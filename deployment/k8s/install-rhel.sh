@@ -52,6 +52,14 @@ install_dependencies() {
   systemctl enable --now docker
   systemctl enable --now containerd
 
+  mkdir -p /etc/docker
+  cat > /etc/docker/daemon.json <<'EOF'
+{
+  "insecure-registries": ["registry.k8s.io"]
+}
+EOF
+  systemctl restart docker
+
   log "Configuring containerd for kubeadm..."
   mkdir -p /etc/containerd
   containerd config default > /etc/containerd/config.toml
