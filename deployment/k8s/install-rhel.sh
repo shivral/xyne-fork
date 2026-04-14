@@ -110,99 +110,6 @@ EOF
   systemctl enable --now kubelet
 }
 
-install_dependencies() {
-  log "Installing system dependencies..."
-  log "Cleaning dnf cache..."
-  dnf clean all
-  dnf makecache
-  
-  dnf update -y -q --allowerasing
-  dnf install -y -q --allowerasing \
-    curl \
-    ca-certificates \
-    gnupg \
-    socat \
-    conntrack \
-    ipset \
-    iproute-tc \
-    yum-utils \
-    device-mapper-persistent-data \
-    lvm2
-
-  log "Installing Docker..."
-  dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-  dnf install -y -q --allowerasing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-  systemctl enable --now docker
-  systemctl enable --now containerd
-
-  log "Configuring containerd for kubeadm..."
-  mkdir -p /etc/containerd
-  containerd config default > /etc/containerd/config.toml
-  sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-  systemctl restart containerd
-}
-
-install_kubeadm() {
-  log "Installing kubeadm, kubelet, kubectl (v1.29)..."
-  
-  cat <<EOF > /etc/yum.repos.d/kubernetes.repo
-[kubernetes]
-name=Kubernetes
-baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
-enabled=1
-gpgcheck=1
-gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
-exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
-EOF
-
-  dnf install -y -q --disableexcludes=kubernetes --allowerasing kubelet kubeadm kubectl
-  
-  log "Installing dnf-plugin-versionlock..."
-  dnf install -y -q --allowerasing 'dnf-command(versionlock)' || dnf install -y -q --allowerasing python3-dnf-plugin-versionlock
-  
-  log "Locking Kubernetes package versions..."
-  dnf versionlock add kubelet kubeadm kubectl
-
-  swapoff -a
-  sed -i '/swap/d' /etc/fstab
-
-  cat > /etc/modules-load.d/k8s.conf <<EOF
-overlay
-br_netfilter
-EOF
-  modprobe overlay
-  modprobe br_netfilter
-
-  cat > /etc/sysctl.d/k8s.conf <<EOF
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-EOF
-  sysctl --system -q
-
-  log "Configuring firewalld for Kubernetes..."
-  if systemctl is-active --quiet firewalld; then
-    firewall-cmd --permanent --add-port=6443/tcp
-    firewall-cmd --permanent --add-port=2379-2380/tcp
-    firewall-cmd --permanent --add-port=10250/tcp
-    firewall-cmd --permanent --add-port=10251/tcp
-    firewall-cmd --permanent --add-port=10252/tcp
-    firewall-cmd --permanent --add-port=10255/tcp
-    firewall-cmd --permanent --add-port=30000-32767/tcp
-    firewall-cmd --permanent --add-masquerade
-    firewall-cmd --reload
-  else
-    log "firewalld not active, skipping firewall rules."
-  fi
-
-  log "Disabling SELinux (required for proper Kubernetes networking)..."
-  setenforce 0 2>/dev/null || true
-  sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
-
-  systemctl enable --now kubelet
-}
-
 init_cluster() {
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
@@ -342,10 +249,10 @@ install_xyne() {
 
 install_istio_routing() {
   log "Applying Istio routing (Gateway, VirtualServices, DestinationRules)..."
-  kubectl apply -f "${MANIFEST_DIR}/istio/gateway.yaml"
-  kubectl apply -f "${MANIFEST_DIR}/istio/virtual-services.yaml"
-  kubectl apply -f "${MANIFEST_DIR}/istio/peer-authentication.yaml"
-  kubectl apply -f "${MANIFEST_DIR}/istio/envoy-filters.yaml"
+  kubectl apply -f "${SCRIPT_DIR}/istio/gateway.yaml"
+  kubectl apply -f "${SCRIPT_DIR}/istio/virtual-services.yaml"
+  kubectl apply -f "${SCRIPT_DIR}/istio/peer-authentication.yaml"
+  kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
 
   log "Waiting 15s for istiod to program ingress gateway..."
   sleep 15
@@ -379,16 +286,11 @@ print_summary() {
     | grep -v "Completed" \
     && warn "Some pods are not Running — check above." || log "All pods Running."
   echo ""
-  log "Deployment manifests stored in: ${MANIFEST_DIR}"
-  warn "To update secrets after deployment:"
-  warn "  1. Edit: ${MANIFEST_DIR}/xyne/configmap.yaml"
-  warn "  2. Apply: kubectl apply -f ${MANIFEST_DIR}/xyne/configmap.yaml"
-  warn "  3. Restart: kubectl rollout restart deployment/xyne-app -n xyne"
+  warn "Before production use — update secrets.yaml with real values:"
+  warn "  kubectl apply -f ${SCRIPT_DIR}/xyne/secrets.yaml"
 }
 
 require_root
-setup_manifests
-configure_secrets
 install_dependencies
 install_kubeadm
 init_cluster
