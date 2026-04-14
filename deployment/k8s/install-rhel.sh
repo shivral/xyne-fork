@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- 1. ENVIRONMENT & PROXY ---
+# --- 1. ENVIRONMENT & PROXY SETUP ---
 export http_proxy="${http_proxy:-}"
 export https_proxy="${https_proxy:-}"
 export no_proxy="localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16,$(hostname)"
@@ -22,16 +22,20 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0"
 }
 
-# --- 2. SYSTEM PREP ---
+# --- 2. SYSTEM DEPENDENCIES & CONFLICTS ---
 install_dependencies() {
-  log "Applying Hostname fix..."
+  log "Applying Hostname fix to /etc/hosts..."
   if ! grep -q "$(hostname)" /etc/hosts; then
     echo "127.0.0.1 $(hostname)" >> /etc/hosts
   fi
 
-  log "Force-resolving OpenSSL FIPS provider file conflict..."
+  log "Force-resolving OpenSSL FIPS provider conflict..."
   dnf remove -y openssl-fips-provider-so --allowerasing || true
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
+
+  log "Adjusting RHEL Crypto-Policy for Proxy compatibility..."
+  # This allows RHEL to accept a wider range of Proxy-signed certificates
+  update-crypto-policies --set DEFAULT:AD-SIGS || true
 
   log "Updating dnf and installing base utilities..."
   dnf clean all && dnf makecache
@@ -53,11 +57,10 @@ Environment="HTTPS_PROXY=${https_proxy}"
 Environment="NO_PROXY=localhost,127.0.0.1,${HOST_IP},10.96.0.0/12,10.244.0.0/16,$(hostname)"
 EOF
 
-  log "RE-GENERATING CLEAN CONTAINERD CONFIG (HARD TLS BYPASS)..."
+  log "GENERATING CLEAN CONTAINERD CONFIG (HARD TLS BYPASS)..."
   mkdir -p /etc/containerd
   rm -f /etc/containerd/config.toml
   
-  # We generate a version 2 config with explicit insecure settings for ALL registries
   cat <<EOF > /etc/containerd/config.toml
 version = 2
 [plugins."io.containerd.grpc.v1.cri"]
@@ -111,17 +114,14 @@ EOF
   systemctl enable --now kubelet
 }
 
-# --- 4. CLUSTER INIT ---
+# --- 4. CLUSTER INITIALIZATION ---
 init_cluster() {
   log "Pulling images (Verification step)..."
-  # Resetting before pull to ensure socket is clean
   kubeadm reset -f || true
   
-  # Try pulling with explicit environment
   if ! kubeadm config images pull --cri-socket=unix:///run/containerd/containerd.sock; then
-    warn "First pull failed, checking containerd status..."
-    systemctl status containerd --no-pager
-    die "Kubeadm image pull failed. Proxy or TLS bypass is still being blocked by the OS."
+    warn "Pull failed. This usually means the proxy is blocking the download even with TLS bypass."
+    die "Check proxy settings or ask IT to whitelist registry.k8s.io"
   fi
 
   log "Initializing Cluster..."
@@ -136,9 +136,9 @@ init_cluster() {
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 }
 
-# --- 5. NETWORK & APPS ---
+# --- 5. INFRASTRUCTURE (CNI, STORAGE, HELM) ---
 install_cni() {
-  log "Installing CNI..."
+  log "Installing Flannel CNI..."
   curl -sSL -k https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml | kubectl apply -f -
   kubectl wait --for=condition=Ready node --all --timeout=120s
 }
@@ -146,10 +146,18 @@ install_cni() {
 install_helm() {
   log "Installing Helm..."
   curl -fsSL -k https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
+  export PATH="/usr/local/bin:$PATH"
 }
 
+install_local_path_provisioner() {
+  log "Installing local-path storage provisioner..."
+  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
+  kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+}
+
+# --- 6. APPLICATIONS ---
 start_vespa() {
-  log "Starting Vespa..."
+  log "Starting Vespa container..."
   if ! docker ps --format '{{.Names}}' | grep -q '^vespa$'; then
     docker run -d --name vespa --hostname vespa-container --restart always \
       -p 8080:8080 -p 8081:8081 -p 19071:19071 vespaengine/vespa
@@ -157,7 +165,7 @@ start_vespa() {
 }
 
 install_istio() {
-  log "Installing Istio..."
+  log "Installing Istio Service Mesh..."
   helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
   helm repo update
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
@@ -168,7 +176,7 @@ install_istio() {
 }
 
 install_xyne() {
-  log "Installing Xyne..."
+  log "Deploying Xyne Stack..."
   kubectl apply -f "${SCRIPT_DIR}/xyne/configmap.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/secrets.yaml"
   sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" "${SCRIPT_DIR}/xyne/vespa-external-service.yaml" | kubectl apply -f -
@@ -180,24 +188,25 @@ install_xyne() {
 }
 
 install_istio_routing() {
-  log "Finalizing Routing..."
+  log "Applying Routing Rules..."
   kubectl apply -f "${SCRIPT_DIR}/istio/gateway.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/virtual-services.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/peer-authentication.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
 }
 
-# --- EXECUTION ---
+# --- 7. MAIN EXECUTION ---
 require_root
 install_dependencies
 install_kubeadm
 init_cluster
 install_cni
 install_helm
+install_local_path_provisioner
 start_vespa
 install_istio
 install_xyne
 install_istio_routing
 
 INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
-log "COMPLETE: http://${HOST_IP}:${INGRESS_PORT}/"
+log "SUCCESS! Reach your app at: http://${HOST_IP}:${INGRESS_PORT}/"
