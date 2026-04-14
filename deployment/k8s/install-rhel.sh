@@ -64,6 +64,31 @@ install_dependencies() {
   systemctl restart containerd
 }
 
+prefetch_images() {
+  log "Pre-fetching all Docker images before containerd is configured..."
+  for image in \
+    docker/desktop-kubernetes-apiserver:v1.29.0 \
+    docker/desktop-kubernetes-controller-manager:v1.29.0 \
+    docker/desktop-kubernetes-scheduler:v1.29.0 \
+    docker/desktop-kubernetes-proxy:v1.29.0 \
+    docker/desktop-kubernetes-coredns:v1.11.1 \
+    docker/desktop-kubernetes-pause:3.9 \
+    docker/desktop-kubernetes-pause:3.10 \
+    docker/desktop-kubernetes-etcd:3.5.16-0 \
+    flannel/flannel:v0.28.2 \
+    flannel/flannel-cni-plugin:v1.9.0-flannel1 \
+    rancher/local-path-provisioner:v0.0.26 \
+    rancher/busybox:1.31.1 \
+    istio/pilot:1.29.2 \
+    istio/proxyv2:1.29.2 \
+    istio/install-cni:1.29.2 \
+    bitnami/postgresql:15 \
+    xynehq/xyne:latest \
+    vespaengine/vespa; do
+    docker pull "$image"
+  done
+}
+
 install_kubeadm() {
   log "Installing kubeadm, kubelet, kubectl (v1.29)..."
   
@@ -436,6 +461,7 @@ print_summary() {
 
 require_root
 install_dependencies
+prefetch_images
 install_kubeadm
 init_cluster
 install_cni
