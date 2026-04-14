@@ -82,7 +82,6 @@ prefetch_images() {
     istio/pilot:1.29.2 \
     istio/proxyv2:1.29.2 \
     istio/install-cni:1.29.2 \
-    postgis/postgis:15-3.5-alpine \
     xynehq/xyne:latest \
     vespaengine/vespa \
     rancher/hardened-cni-plugins:v1.4.0-build20240122; do
@@ -137,6 +136,7 @@ EOF
     firewall-cmd --permanent --add-port=10252/tcp
     firewall-cmd --permanent --add-port=10255/tcp
     firewall-cmd --permanent --add-port=30000-32767/tcp
+    firewall-cmd --permanent --add-port=5432/tcp
     firewall-cmd --permanent --add-masquerade
     firewall-cmd --reload
   else
@@ -288,6 +288,36 @@ install_helm() {
   fi
 }
 
+start_postgres() {
+  log "Starting PostgreSQL (PostGIS) on host via Docker..."
+  if docker ps --format '{{.Names}}' | grep -q '^xyne-db$'; then
+    log "xyne-db container already running."
+  elif docker ps -a --format '{{.Names}}' | grep -q '^xyne-db$'; then
+    docker start xyne-db
+    log "xyne-db container started (was stopped)."
+  else
+    docker run -d \
+      --name xyne-db \
+      --restart always \
+      -e POSTGRES_USER=xyne \
+      -e POSTGRES_PASSWORD=xyne \
+      -e POSTGRES_DB=xyne \
+      -e POSTGRES_INITDB_ARGS="--encoding=UTF-8 --lc-collate=C --lc-ctype=C" \
+      -p 5432:5432 \
+      postgis/postgis:15-3.5-alpine
+    log "xyne-db container created and started."
+  fi
+
+  log "Waiting for PostgreSQL to be ready..."
+  for i in $(seq 1 30); do
+    if docker exec xyne-db pg_isready -U xyne -d xyne &>/dev/null; then
+      log "PostgreSQL is ready."
+      break
+    fi
+    sleep 3
+  done
+}
+
 start_vespa() {
   log "Starting Vespa on host via Docker..."
   if docker ps --format '{{.Names}}' | grep -q '^vespa$'; then
@@ -382,12 +412,13 @@ install_local_path_provisioner() {
 
 install_xyne() {
   log "Applying xyne namespace manifests..."
-  kubectl apply -f "${SCRIPT_DIR}/xyne/configmap.yaml"
+  sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" \
+    "${SCRIPT_DIR}/xyne/configmap.yaml" \
+    | kubectl apply -f -
   kubectl apply -f "${SCRIPT_DIR}/xyne/secrets.yaml"
 
   log "Pre-pulling xyne application images via Docker then importing into containerd..."
   for image in \
-    "postgis/postgis:15-3.5-alpine" \
     "xynehq/xyne:latest"; do
     docker pull "$image"
     docker save "$image" -o /tmp/xyne-image.tar
@@ -400,16 +431,19 @@ install_xyne() {
     "${SCRIPT_DIR}/xyne/vespa-external-service.yaml" \
     | kubectl apply -f -
 
-  kubectl apply -f "${SCRIPT_DIR}/xyne/db-statefulset.yaml"
+  log "Patching Postgres Endpoints with host IP: ${HOST_IP}..."
+  sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" \
+    "${SCRIPT_DIR}/xyne/postgres-external-service.yaml" \
+    | kubectl apply -f -
 
-  log "Waiting for Postgres to be ready..."
-  kubectl rollout status statefulset/xyne-db -n xyne --timeout=180s
-
-  log "Applying Istio destination rules and sidecar policy before app starts..."
   kubectl apply -f "${SCRIPT_DIR}/istio/destination-rules.yaml"
 
-  kubectl apply -f "${SCRIPT_DIR}/xyne/app-deployment.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/xyne/app-sync-deployment.yaml"
+  sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" \
+    "${SCRIPT_DIR}/xyne/app-deployment.yaml" \
+    | kubectl apply -f -
+  sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" \
+    "${SCRIPT_DIR}/xyne/app-sync-deployment.yaml" \
+    | kubectl apply -f -
 
   log "Waiting for xyne-app-sync to be ready..."
   kubectl rollout status deployment/xyne-app-sync -n xyne --timeout=300s
@@ -470,6 +504,7 @@ install_cni
 install_helm
 install_local_path_provisioner
 install_istio
+start_postgres
 start_vespa
 install_xyne
 install_istio_routing

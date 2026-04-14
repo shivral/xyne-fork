@@ -5,7 +5,7 @@ metadata:
   namespace: xyne
 data:
   NODE_ENV: "production"
-  DATABASE_HOST: "xyne-db"
+  DATABASE_HOST: "HOST_IP_PLACEHOLDER"
   VESPA_HOST: "vespa"
   VESPA_FEED_PORT: "8080"
   VESPA_QUERY_PORT: "8081"
@@ -24,11 +24,11 @@ metadata:
 data:
   .env: |
     NODE_ENV=production
-    DATABASE_HOST=xyne-db
+    DATABASE_HOST=HOST_IP_PLACEHOLDER
     DATABASE_PORT=5432
     DATABASE_USER=xyne
     DATABASE_PASSWORD=xyne
-    DATABASE_URL=postgresql://xyne:xyne@xyne-db:5432/xyne?sslmode=disable
+    DATABASE_URL=postgresql://xyne:xyne@HOST_IP_PLACEHOLDER:5432/xyne?sslmode=disable
     POSTGRES_PASSWORD=xyne
     VESPA_HOST=vespa
     VESPA_FEED_PORT=8080
