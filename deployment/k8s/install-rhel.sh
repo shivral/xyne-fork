@@ -294,8 +294,9 @@ start_vespa() {
 
 install_istio() {
   log "Installing Istio via Helm..."
-  helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
-  helm repo update
+  helm repo add istio https://istio-release.storage.googleapis.com/charts \
+    --insecure-skip-tls-verify 2>/dev/null || true
+  helm repo update --insecure-skip-tls-verify
 
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
 
@@ -323,6 +324,12 @@ install_istio() {
 
 install_local_path_provisioner() {
   log "Installing local-path storage provisioner..."
+
+  for image in rancher/local-path-provisioner:v0.0.26 busybox:latest; do
+    docker pull "$image"
+    docker save "$image" | ctr -n k8s.io images import --base-name "$image" -
+  done
+
   curl -fsSLk https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml \
     | kubectl apply -f -
   kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
