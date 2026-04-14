@@ -61,6 +61,9 @@ spec:
         - name: xyne-app
           image: docker.io/xynehq/xyne:latest
           imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: xyne-config
           env:
             - name: ENCRYPTION_KEY
               value: "Mn/oXPQn5CfCGEVTkguyxJHyo/hs6kB1AjylWzwINSg="
