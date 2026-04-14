@@ -4,7 +4,7 @@ set -euo pipefail
 # --- 1. PROXY & ENVIRONMENT ---
 export http_proxy="${http_proxy:-}"
 export https_proxy="${https_proxy:-}"
-export no_proxy="localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16,$(hostname)"
+export no_proxy="localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16,$(hostname),$(hostname -I | tr ' ' ',')"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_IP=$(hostname -I | awk '{print $1}')
@@ -22,14 +22,23 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0"
 }
 
-# --- 2. SYSTEM DEPENDENCIES & CONFLICTS ---
+# --- 2. SYSTEM DEPENDENCIES & TRUST ---
 install_dependencies() {
   log "Fixing local hostname resolution..."
   if ! grep -q "$(hostname)" /etc/hosts; then
     echo "127.0.0.1 $(hostname)" >> /etc/hosts
   fi
 
-  log "Handling OpenSSL FIPS provider conflict..."
+  log "Attempting to 'steal' and trust the proxy certificate..."
+  # This grabs whatever cert the proxy is using and forces RHEL to trust it
+  openssl s_client -showcerts -connect registry.k8s.io:443 </dev/null 2>/dev/null | openssl x509 -outform PEM > /tmp/proxy-ca.crt || true
+  if [ -s /tmp/proxy-ca.crt ]; then
+    cp /tmp/proxy-ca.crt /etc/pki/ca-trust/source/anchors/proxy-k8s-fix.crt
+    update-ca-trust extract
+    log "Proxy cert added to system trust."
+  fi
+
+  log "Removing conflicting OpenSSL FIPS provider..."
   dnf remove -y openssl-fips-provider-so --allowerasing || true
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
 
@@ -44,8 +53,22 @@ install_dependencies() {
   dnf install -y --allowerasing --setopt=tsflags=replacefiles \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  log "Configuring Proxy for Docker & Containerd..."
-  # Both services need the proxy settings to reach the registry
+  log "Configuring Docker to treat K8s registries as INSECURE..."
+  # This bypasses the 'negative serial number' x509 error by skipping validation
+  mkdir -p /etc/docker
+  cat <<EOF > /etc/docker/daemon.json
+{
+  "insecure-registries": [
+    "registry.k8s.io",
+    "asia-south1-docker.pkg.dev",
+    "gcr.io",
+    "k8s.gcr.io"
+  ],
+  "exec-opts": ["native.cgroupdriver=systemd"]
+}
+EOF
+
+  log "Configuring Proxy for systemd services..."
   for svc in docker containerd; do
     mkdir -p /etc/systemd/system/${svc}.service.d
     cat <<EOF > /etc/systemd/system/${svc}.service.d/http-proxy.conf
@@ -56,7 +79,7 @@ Environment="NO_PROXY=${no_proxy}"
 EOF
   done
 
-  log "Configuring Containerd for Kubernetes (SystemdCgroup)..."
+  log "Configuring Containerd (SystemdCgroup)..."
   mkdir -p /etc/containerd
   containerd config default > /etc/containerd/config.toml
   sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
@@ -68,7 +91,7 @@ EOF
 
 # --- 3. KUBERNETES INSTALLATION ---
 install_kubeadm() {
-  log "Installing K8s binaries (v1.29)..."
+  log "Installing K8s binaries..."
   cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
 name=Kubernetes
@@ -95,29 +118,28 @@ EOF
   systemctl enable --now kubelet
 }
 
-# --- 4. THE DOCKER MULE BYPASS ---
+# --- 4. THE INSECURE-MULE BYPASS ---
 init_cluster() {
   log "Cleaning previous attempts..."
   kubeadm reset -f || true
 
-  log "Starting Docker Image Sideload (Bypassing Containerd SSL errors)..."
-  # Dynamically get the required images for this version
+  log "Pulling images via INSECURE DOCKER and transferring to Containerd..."
+  # Explicitly using v1.29.15 to avoid the dl.k8s.io version-check timeout
   K8S_IMAGES=$(kubeadm config images list --kubernetes-version v1.29.15)
   
   for img in $K8S_IMAGES; do
-    log "Docker pulling: $img"
-    # Docker is more likely to succeed with proxy environment variables
+    log "Docker pulling (Insecure Mode): $img"
     if docker pull "$img"; then
-        log "Transferring $img to Containerd (k8s.io namespace)..."
-        # We pipe the save output directly to the import command
+        log "Sideloading $img into Containerd..."
         docker save "$img" | ctr -n k8s.io images import -
     else
-        warn "Docker failed to pull $img. Check your proxy settings."
+        warn "Failed to pull $img. Your proxy might be blocking the domain asia-south1-docker.pkg.dev entirely."
     fi
   done
 
-  log "Initializing Cluster (Images are now local)..."
+  log "Initializing Cluster (Using pre-loaded images)..."
   kubeadm init \
+    --kubernetes-version=v1.29.15 \
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address="${HOST_IP}" \
     --cri-socket=unix:///run/containerd/containerd.sock
@@ -149,14 +171,13 @@ install_local_path_provisioner() {
 
 start_vespa() {
   log "Starting Vespa container..."
-  # Clean up existing vespa if present
   docker ps -a --format '{{.Names}}' | grep -q "^vespa$" && docker rm -f vespa || true
   docker run -d --name vespa --hostname vespa-container --restart always \
     -p 8080:8080 -p 8081:8081 -p 19071:19071 vespaengine/vespa
 }
 
 install_istio() {
-  log "Installing Istio Service Mesh..."
+  log "Installing Istio via Helm..."
   helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
   helm repo update
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
@@ -186,7 +207,7 @@ install_istio_routing() {
   kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
 }
 
-# --- MAIN EXECUTION ---
+# --- EXECUTION ---
 require_root
 install_dependencies
 install_kubeadm
@@ -200,4 +221,4 @@ install_xyne
 install_istio_routing
 
 INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
-log "SUCCESS! Reach app at: http://${HOST_IP}:${INGRESS_PORT}/"
+log "SUCCESS! http://${HOST_IP}:${INGRESS_PORT}/"
