@@ -23,10 +23,22 @@ install_dependencies() {
   dnf clean all
   dnf makecache
 
-  log "Rebuilding CA trust store to remove certs with negative serial numbers..."
-  dnf reinstall -y ca-certificates 2>/dev/null || dnf install -y ca-certificates
-  update-ca-trust force-enable
-  update-ca-trust extract
+  log "Extracting proxy CA certificate from registry.k8s.io..."
+  openssl s_client -connect registry.k8s.io:443 -showcerts 2>/dev/null </dev/null \
+    | awk '/BEGIN CERTIFICATE/{c++} c==2{print} /END CERTIFICATE/ && c==2{exit}' \
+    > /tmp/proxy-ca.crt
+
+  if [[ -s /tmp/proxy-ca.crt ]]; then
+    log "Proxy CA cert extracted successfully:"
+    cat /tmp/proxy-ca.crt
+    cp /tmp/proxy-ca.crt /etc/pki/ca-trust/source/anchors/proxy-ca.crt
+    mkdir -p /etc/docker/certs.d/registry.k8s.io
+    cp /tmp/proxy-ca.crt /etc/docker/certs.d/registry.k8s.io/ca.crt
+    update-ca-trust extract
+    log "Proxy CA cert installed into system and Docker trust stores."
+  else
+    warn "Could not extract proxy CA cert — TLS errors may follow."
+  fi
   
   log "Removing conflicting packages before update..."
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
