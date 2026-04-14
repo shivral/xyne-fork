@@ -332,7 +332,9 @@ install_istio() {
     "istio/proxyv2:${ISTIO_VERSION}" \
     "istio/install-cni:${ISTIO_VERSION}"; do
     docker pull "$image"
-    docker save "$image" | ctr -n k8s.io images import --base-name "docker.io/$image" -
+    docker save "$image" -o /tmp/istio-image.tar
+    ctr -n k8s.io images import --base-name "docker.io/${image}" /tmp/istio-image.tar
+    rm -f /tmp/istio-image.tar
   done
 
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
@@ -358,7 +360,7 @@ install_istio() {
     --version "${ISTIO_VERSION}" \
     -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" \
     --insecure-skip-tls-verify \
-    --wait --timeout=120s || true
+    --wait --timeout=300s || true
 
   log "Waiting for istio-ingress pod to be ready..."
   kubectl rollout restart deployment/istio-ingress -n istio-system
