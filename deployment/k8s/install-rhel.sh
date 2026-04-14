@@ -122,6 +122,10 @@ EOF
 }
 
 init_cluster() {
+  log "Resetting any previous kubeadm state..."
+  kubeadm reset -f 2>/dev/null || true
+  rm -rf /etc/kubernetes /var/lib/etcd /var/lib/kubelet/config.yaml
+
   log "Pre-installing Flannel CNI plugin binaries..."
   mkdir -p /opt/cni/bin
   curl -fsSLk https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
