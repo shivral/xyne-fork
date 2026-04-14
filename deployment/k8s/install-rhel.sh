@@ -260,10 +260,7 @@ install_cni() {
     docker save "$target" | ctr -n k8s.io images import --base-name "$target" -
   done
 
-  curl -fsSLk --proxy-insecure https://github.com/flannel-io/flannel/releases/download/v0.28.2/kube-flannel.yml \
-    -o /tmp/kube-flannel.yml
-  kubectl apply -f /tmp/kube-flannel.yml
-  rm -f /tmp/kube-flannel.yml
+  kubectl apply -f "${SCRIPT_DIR}/flannel/kube-flannel.yaml"
 
   log "Waiting for node to be Ready..."
   kubectl wait --for=condition=Ready node --all --timeout=300s
@@ -380,10 +377,7 @@ install_local_path_provisioner() {
   rm -f /tmp/busybox.tar
   ctr -n k8s.io images tag docker.io/library/busybox:latest docker.io/library/busybox:latest 2>/dev/null || true
 
-  curl -fsSLk --proxy-insecure https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml \
-    -o /tmp/local-path-storage.yaml
-  kubectl apply -f /tmp/local-path-storage.yaml
-  rm -f /tmp/local-path-storage.yaml
+  kubectl apply -f "${SCRIPT_DIR}/local-path/local-path-storage.yaml"
   kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
   log "Waiting for local-path provisioner..."
   kubectl rollout status deployment/local-path-provisioner -n local-path-storage --timeout=60s
