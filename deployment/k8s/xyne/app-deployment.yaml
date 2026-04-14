@@ -37,7 +37,7 @@ spec:
         fsGroup: 1000
       initContainers:
         - name: storage-init
-          image: busybox:latest
+          image: busybox
           securityContext:
             runAsUser: 0
           command:
