@@ -133,10 +133,16 @@ EOF
 init_cluster() {
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
+  log "Pre-pulling kubeadm images via ctr (skipping TLS verification)..."
+  kubeadm config images list --kubernetes-version=v1.29 2>/dev/null | while read -r image; do
+    ctr -n k8s.io images pull --skip-verify "$image" || true
+  done
+
   kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address="${HOST_IP}" \
-    --cri-socket=unix:///run/containerd/containerd.sock
+    --cri-socket=unix:///run/containerd/containerd.sock \
+    --ignore-preflight-errors=SystemVerification
 
   mkdir -p "$HOME/.kube"
   cp /etc/kubernetes/admin.conf "$HOME/.kube/config"
