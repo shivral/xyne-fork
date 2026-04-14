@@ -144,6 +144,7 @@ init_cluster() {
   ctr -n k8s.io images ls | grep registry.k8s.io
 
   kubeadm init \
+    --kubernetes-version=v1.29.0 \
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address="${HOST_IP}" \
     --cri-socket=unix:///run/containerd/containerd.sock \
