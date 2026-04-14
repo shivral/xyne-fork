@@ -56,6 +56,7 @@ install_dependencies() {
   mkdir -p /etc/containerd
   containerd config default > /etc/containerd/config.toml
   sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+  sed -i 's|sandbox_image = ".*"|sandbox_image = "registry.k8s.io/pause:3.10.1"|' /etc/containerd/config.toml
 
   systemctl restart containerd
 }
@@ -131,6 +132,7 @@ init_cluster() {
     ["registry.k8s.io/kube-proxy:v1.29.0"]="docker/desktop-kubernetes-proxy:v1.29.0"
     ["registry.k8s.io/coredns/coredns:v1.11.1"]="docker/desktop-kubernetes-coredns:v1.11.1"
     ["registry.k8s.io/pause:3.9"]="docker/desktop-kubernetes-pause:3.9"
+    ["registry.k8s.io/pause:3.10"]="docker/desktop-kubernetes-pause:3.10"
     ["registry.k8s.io/etcd:3.5.16-0"]="docker/desktop-kubernetes-etcd:3.5.16-0"
   )
   for target in "${!IMAGES[@]}"; do
@@ -139,6 +141,8 @@ init_cluster() {
     docker tag "$mirror" "$target"
     docker save "$target" | ctr -n k8s.io images import --base-name "$target" -
   done
+
+  ctr -n k8s.io images tag registry.k8s.io/pause:3.10 registry.k8s.io/pause:3.10.1 2>/dev/null || true
 
   log "Images now in containerd k8s.io namespace:"
   ctr -n k8s.io images ls | grep registry.k8s.io
