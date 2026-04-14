@@ -38,7 +38,12 @@ install_dependencies() {
 
   log "Installing Docker..."
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-  dnf install -y -q --allowerasing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  
+  # Handle file conflicts on CentOS 9 Stream
+  log "Resolving package conflicts..."
+  dnf swap -y -q openssl-fips-provider-so openssl-fips-provider 2>/dev/null || true
+  
+  dnf install -y -q --allowerasing --nobest --skip-broken docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   systemctl enable --now docker
   systemctl enable --now containerd
