@@ -82,7 +82,7 @@ prefetch_images() {
     istio/pilot:1.29.2 \
     istio/proxyv2:1.29.2 \
     istio/install-cni:1.29.2 \
-    postgres:15-alpine \
+    postgis/postgis:15-3.5-alpine \
     xynehq/xyne:latest \
     vespaengine/vespa; do
     docker pull "$image"
@@ -387,7 +387,7 @@ install_xyne() {
 
   log "Pre-pulling xyne application images via Docker then importing into containerd..."
   for image in \
-    "postgres:15-alpine" \
+    "postgis/postgis:15-3.5-alpine" \
     "xynehq/xyne:latest"; do
     docker pull "$image"
     docker save "$image" | ctr -n k8s.io images import --base-name "docker.io/$image" -
