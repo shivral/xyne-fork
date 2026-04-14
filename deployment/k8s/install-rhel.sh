@@ -26,8 +26,12 @@ install_dependencies() {
   log "Removing conflicting packages before update..."
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
   rpm -e --nodeps containers-common 2>/dev/null || true
-  
-  dnf update -y --allowerasing --setopt=tsflags=replacefiles
+
+  log "Updating system (excluding openssl-fips-provider-so to prevent file conflict)..."
+  dnf update -y --allowerasing --setopt=tsflags=replacefiles \
+    --exclude=openssl-fips-provider-so
+
+  rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
   dnf install -y -q --allowerasing \
     curl \
     ca-certificates \
@@ -52,6 +56,17 @@ install_dependencies() {
   mkdir -p /etc/containerd
   containerd config default > /etc/containerd/config.toml
   sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+  sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|' /etc/containerd/config.toml
+
+  mkdir -p /etc/containerd/certs.d/registry.k8s.io
+  cat > /etc/containerd/certs.d/registry.k8s.io/hosts.toml <<'EOF'
+server = "https://registry.k8s.io"
+
+[host."https://registry.k8s.io"]
+  capabilities = ["pull", "resolve"]
+  skip_verify = true
+EOF
+
   systemctl restart containerd
 }
 
