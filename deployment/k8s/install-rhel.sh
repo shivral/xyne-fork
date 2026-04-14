@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- 1. ENVIRONMENT & PROXY SETUP ---
+# --- 1. PROXY & ENVIRONMENT ---
+# We force these into the environment for every sub-shell
 export http_proxy="${http_proxy:-}"
 export https_proxy="${https_proxy:-}"
-export no_proxy="localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16,$(hostname)"
+export no_proxy="localhost,127.0.0.1,10.96.0.0/12,10.244.0.0/16,$(hostname),$(hostname -I | tr ' ' ',')"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_IP=$(hostname -I | awk '{print $1}')
@@ -22,22 +23,30 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0"
 }
 
-# --- 2. SYSTEM DEPENDENCIES & CONFLICTS ---
+# --- 2. PRE-FLIGHT CONNECTIVITY CHECK ---
+check_connectivity() {
+  log "Testing proxy connectivity to Kubernetes registry..."
+  # Use -k to ignore SSL for this check. If this fails, IT is blocking the URL.
+  if ! curl -Is -k --connect-timeout 5 https://registry.k8s.io/v2/ > /dev/null; then
+    die "Proxy cannot reach registry.k8s.io. Check your proxy settings or IT firewall."
+  fi
+  log "Connectivity test passed."
+}
+
+# --- 3. SYSTEM PREP & CONFLICTS ---
 install_dependencies() {
-  log "Applying Hostname fix to /etc/hosts..."
+  log "Fixing local hostname and crypto-policies..."
   if ! grep -q "$(hostname)" /etc/hosts; then
     echo "127.0.0.1 $(hostname)" >> /etc/hosts
   fi
+  # Allows RHEL to accept certificates from older/corporate proxies
+  update-crypto-policies --set DEFAULT:AD-SIGS || true
 
-  log "Force-resolving OpenSSL FIPS provider conflict..."
+  log "Removing conflicting OpenSSL FIPS provider..."
   dnf remove -y openssl-fips-provider-so --allowerasing || true
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
 
-  log "Adjusting RHEL Crypto-Policy for Proxy compatibility..."
-  # This allows RHEL to accept a wider range of Proxy-signed certificates
-  update-crypto-policies --set DEFAULT:AD-SIGS || true
-
-  log "Updating dnf and installing base utilities..."
+  log "Updating dnf cache and system..."
   dnf clean all && dnf makecache
   dnf update -y --allowerasing --setopt=tsflags=replacefiles
   dnf install -y -q --allowerasing --setopt=tsflags=replacefiles \
@@ -48,32 +57,34 @@ install_dependencies() {
   dnf install -y --allowerasing --setopt=tsflags=replacefiles \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  log "Injecting Proxy into Containerd systemd unit..."
+  log "Setting up Containerd Systemd Proxy..."
   mkdir -p /etc/systemd/system/containerd.service.d
   cat <<EOF > /etc/systemd/system/containerd.service.d/http-proxy.conf
 [Service]
 Environment="HTTP_PROXY=${http_proxy}"
 Environment="HTTPS_PROXY=${https_proxy}"
-Environment="NO_PROXY=localhost,127.0.0.1,${HOST_IP},10.96.0.0/12,10.244.0.0/16,$(hostname)"
+Environment="NO_PROXY=${no_proxy}"
 EOF
 
-  log "GENERATING CLEAN CONTAINERD CONFIG (HARD TLS BYPASS)..."
+  log "WRITING DEFINITIVE CONTAINERD CONFIG (FORCE TLS BYPASS)..."
   mkdir -p /etc/containerd
-  rm -f /etc/containerd/config.toml
-  
+  # We use Version 2 syntax which is strict on indentation.
   cat <<EOF > /etc/containerd/config.toml
 version = 2
-[plugins."io.containerd.grpc.v1.cri"]
-  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
-    runtime_type = "io.containerd.runc.v2"
-    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
-      SystemdCgroup = true
-  [plugins."io.containerd.grpc.v1.cri".registry]
-    [plugins."io.containerd.grpc.v1.cri".registry.configs]
-      [plugins."io.containerd.grpc.v1.cri".registry.configs."registry.k8s.io".tls]
-        insecure_skip_verify = true
-      [plugins."io.containerd.grpc.v1.cri".registry.configs."docker.io".tls]
-        insecure_skip_verify = true
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+          runtime_type = "io.containerd.runc.v2"
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+            SystemdCgroup = true
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      [plugins."io.containerd.grpc.v1.cri".registry.configs]
+        [plugins."io.containerd.grpc.v1.cri".registry.configs."registry.k8s.io".tls]
+          insecure_skip_verify = true
+        [plugins."io.containerd.grpc.v1.cri".registry.configs."docker.io".tls]
+          insecure_skip_verify = true
 EOF
 
   systemctl daemon-reload
@@ -81,7 +92,7 @@ EOF
   systemctl restart containerd
 }
 
-# --- 3. KUBERNETES INSTALL ---
+# --- 4. KUBERNETES INSTALL ---
 install_kubeadm() {
   log "Installing K8s binaries..."
   cat <<EOF > /etc/yum.repos.d/kubernetes.repo
@@ -114,14 +125,16 @@ EOF
   systemctl enable --now kubelet
 }
 
-# --- 4. CLUSTER INITIALIZATION ---
+# --- 5. CLUSTER INITIALIZATION ---
 init_cluster() {
-  log "Pulling images (Verification step)..."
+  log "PRE-PULLING IMAGES (If this hangs, the Proxy is dropping the connection)..."
   kubeadm reset -f || true
   
+  # We use a longer timeout and explicit socket to force the new config to load
   if ! kubeadm config images pull --cri-socket=unix:///run/containerd/containerd.sock; then
-    warn "Pull failed. This usually means the proxy is blocking the download even with TLS bypass."
-    die "Check proxy settings or ask IT to whitelist registry.k8s.io"
+    warn "The bypass didn't work. Trying to manually pull 'pause' image as a test..."
+    # Attempting to pull the most basic image via containerd's CLI directly
+    crictl pull registry.k8s.io/pause:3.9 || die "CRICTL failed. IT is likely blocking HTTPS Head requests."
   fi
 
   log "Initializing Cluster..."
@@ -136,7 +149,7 @@ init_cluster() {
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 }
 
-# --- 5. INFRASTRUCTURE (CNI, STORAGE, HELM) ---
+# --- 6. INFRA & APPS ---
 install_cni() {
   log "Installing Flannel CNI..."
   curl -sSL -k https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml | kubectl apply -f -
@@ -146,26 +159,23 @@ install_cni() {
 install_helm() {
   log "Installing Helm..."
   curl -fsSL -k https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
-  export PATH="/usr/local/bin:$PATH"
 }
 
 install_local_path_provisioner() {
-  log "Installing local-path storage provisioner..."
+  log "Installing storage provisioner..."
   kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
   kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 }
 
-# --- 6. APPLICATIONS ---
 start_vespa() {
-  log "Starting Vespa container..."
-  if ! docker ps --format '{{.Names}}' | grep -q '^vespa$'; then
-    docker run -d --name vespa --hostname vespa-container --restart always \
-      -p 8080:8080 -p 8081:8081 -p 19071:19071 vespaengine/vespa
-  fi
+  log "Starting Vespa..."
+  docker ps -a --format '{{.Names}}' | grep -q "^vespa$" && docker rm -f vespa || true
+  docker run -d --name vespa --hostname vespa-container --restart always \
+    -p 8080:8080 -p 8081:8081 -p 19071:19071 vespaengine/vespa
 }
 
 install_istio() {
-  log "Installing Istio Service Mesh..."
+  log "Installing Istio..."
   helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
   helm repo update
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
@@ -195,8 +205,9 @@ install_istio_routing() {
   kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
 }
 
-# --- 7. MAIN EXECUTION ---
+# --- 7. EXECUTION ---
 require_root
+check_connectivity
 install_dependencies
 install_kubeadm
 init_cluster
@@ -209,4 +220,4 @@ install_xyne
 install_istio_routing
 
 INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
-log "SUCCESS! Reach your app at: http://${HOST_IP}:${INGRESS_PORT}/"
+log "SUCCESS! Reach app at: http://${HOST_IP}:${INGRESS_PORT}/"
