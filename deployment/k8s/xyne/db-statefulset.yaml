@@ -28,43 +28,44 @@ spec:
         app: xyne-db
     spec:
       securityContext:
-        runAsUser: 999
-        runAsGroup: 999
-        fsGroup: 999
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
       initContainers:
         - name: init-permissions
-          image: busybox
+          image: busybox:latest
           securityContext:
             runAsUser: 0
           command:
             - sh
             - -c
             - |
-              chown -R 999:999 /var/lib/postgresql/data
-              chmod -R 700 /var/lib/postgresql/data
+              mkdir -p /bitnami/postgresql/data
+              chown -R 1001:1001 /bitnami/postgresql/data
+              chmod -R 700 /bitnami/postgresql/data
           volumeMounts:
             - name: postgres-data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /bitnami/postgresql/data
       containers:
         - name: postgres
-          image: postgres:15-alpine
+          image: bitnami/postgresql:15
           ports:
             - containerPort: 5432
           env:
-            - name: POSTGRES_USER
+            - name: POSTGRESQL_USERNAME
               value: xyne
-            - name: POSTGRES_DB
+            - name: POSTGRESQL_DATABASE
               value: xyne
-            - name: POSTGRES_PASSWORD
+            - name: POSTGRESQL_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: xyne-secrets
                   key: POSTGRES_PASSWORD
-            - name: POSTGRES_INITDB_ARGS
+            - name: POSTGRESQL_EXTRA_FLAGS
               value: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
           volumeMounts:
             - name: postgres-data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /bitnami/postgresql/data
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "xyne", "-d", "xyne"]

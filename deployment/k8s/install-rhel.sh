@@ -298,15 +298,28 @@ install_istio() {
     --insecure-skip-tls-verify 2>/dev/null || true
   helm repo update --insecure-skip-tls-verify
 
+  ISTIO_VERSION="1.29.2"
+
+  log "Pre-pulling Istio images via Docker then importing into containerd..."
+  for image in \
+    "istio/pilot:${ISTIO_VERSION}" \
+    "istio/proxyv2:${ISTIO_VERSION}" \
+    "istio/install-cni:${ISTIO_VERSION}"; do
+    docker pull "$image"
+    docker save "$image" | ctr -n k8s.io images import --base-name "docker.io/$image" -
+  done
+
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
 
   helm upgrade --install istio-base istio/base \
     -n istio-system \
+    --version "${ISTIO_VERSION}" \
     -f "${SCRIPT_DIR}/helm/istio-base-values.yaml" \
     --wait
 
   helm upgrade --install istiod istio/istiod \
     -n istio-system \
+    --version "${ISTIO_VERSION}" \
     -f "${SCRIPT_DIR}/helm/istiod-values.yaml" \
     --wait
 
@@ -314,6 +327,7 @@ install_istio() {
 
   helm upgrade --install istio-ingress istio/gateway \
     -n istio-system \
+    --version "${ISTIO_VERSION}" \
     -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" \
     --wait --timeout=120s || true
 
@@ -330,8 +344,8 @@ install_local_path_provisioner() {
     docker save "$image" | ctr -n k8s.io images import --base-name "$image" -
   done
 
-  docker pull rancher/busybox:1.36.1
-  docker tag rancher/busybox:1.36.1 busybox:latest
+  docker pull rancher/busybox:1.31.1
+  docker tag rancher/busybox:1.31.1 busybox:latest
   docker save busybox:latest | ctr -n k8s.io images import --base-name "busybox:latest" -
 
   curl -fsSLk https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml \
@@ -345,6 +359,14 @@ install_xyne() {
   log "Applying xyne namespace manifests..."
   kubectl apply -f "${SCRIPT_DIR}/xyne/configmap.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/secrets.yaml"
+
+  log "Pre-pulling xyne application images via Docker then importing into containerd..."
+  for image in \
+    "bitnami/postgresql:15" \
+    "xynehq/xyne:latest"; do
+    docker pull "$image"
+    docker save "$image" | ctr -n k8s.io images import --base-name "docker.io/$image" -
+  done
 
   log "Patching Vespa Endpoints with host IP: ${HOST_IP}..."
   sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" \
