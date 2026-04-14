@@ -322,7 +322,7 @@ install_istio() {
   log "Installing Istio via Helm..."
   helm repo add istio https://istio-release.storage.googleapis.com/charts \
     --insecure-skip-tls-verify 2>/dev/null || true
-  helm repo update --insecure-skip-tls-verify
+  helm repo update
 
   ISTIO_VERSION="1.29.2"
 
