@@ -65,6 +65,14 @@ spec:
             - configMapRef:
                 name: xyne-config
           env:
+            - name: DATABASE_URL
+              value: "postgresql://xyne:xyne@xyne-db:5432/xyne"
+            - name: DATABASE_PORT
+              value: "5432"
+            - name: DATABASE_USER
+              value: "xyne"
+            - name: DATABASE_PASSWORD
+              value: "xyne"
             - name: ENCRYPTION_KEY
               value: "Mn/oXPQn5CfCGEVTkguyxJHyo/hs6kB1AjylWzwINSg="
             - name: SERVICE_ACCOUNT_ENCRYPTION_KEY
