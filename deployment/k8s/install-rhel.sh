@@ -325,10 +325,14 @@ install_istio() {
 install_local_path_provisioner() {
   log "Installing local-path storage provisioner..."
 
-  for image in rancher/local-path-provisioner:v0.0.26 busybox:latest; do
+  for image in rancher/local-path-provisioner:v0.0.26; do
     docker pull "$image"
     docker save "$image" | ctr -n k8s.io images import --base-name "$image" -
   done
+
+  docker pull rancher/busybox:1.36.1
+  docker tag rancher/busybox:1.36.1 busybox:latest
+  docker save busybox:latest | ctr -n k8s.io images import --base-name "busybox:latest" -
 
   curl -fsSLk https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml \
     | kubectl apply -f -
