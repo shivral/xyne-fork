@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Environment Setup ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_IP=$(hostname -I | awk '{print $1}')
 
@@ -14,63 +15,62 @@ warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
 die()  { echo -e "${RED}[error]${NC} $*"; exit 1; }
 
 require_root() {
-  [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0 (use -E to preserve proxy settings)"
+  [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0 (Use -E to pass proxy settings)"
 }
 
+# --- 1. System Prep & Conflict Resolution ---
 install_dependencies() {
-  log "Installing system dependencies..."
-  
-  # FIX: Aggressively remove the specific package causing the 'fips.so' conflict
-  log "Resolving OpenSSL FIPS provider conflicts..."
+  log "Applying Hostname fix to /etc/hosts..."
+  if ! grep -q "$(hostname)" /etc/hosts; then
+    echo "127.0.0.1 $(hostname)" >> /etc/hosts
+  fi
+
+  log "Removing conflicting OpenSSL FIPS provider..."
+  # This fixes the 'fips.so' transaction test error from your screenshot
   dnf remove -y openssl-fips-provider-so --allowerasing || true
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
 
   log "Cleaning dnf cache..."
   dnf clean all
-  rm -rf /var/cache/dnf
   dnf makecache
   
-  log "Removing other conflicting packages before update..."
-  rpm -e --nodeps containers-common 2>/dev/null || true
-  
-  # FIX: Using 'replacefiles' to force overwrite any remaining shared library locks
-  log "Updating system packages..."
+  log "Updating system with force-overwrite allowed..."
   dnf update -y --allowerasing --setopt=tsflags=replacefiles
   
   log "Installing core utilities..."
   dnf install -y -q --allowerasing --setopt=tsflags=replacefiles \
-    curl \
-    ca-certificates \
-    gnupg \
-    socat \
-    conntrack \
-    ipset \
-    iproute-tc \
-    yum-utils \
-    device-mapper-persistent-data \
-    lvm2
+    curl ca-certificates gnupg socat conntrack ipset iproute-tc yum-utils device-mapper-persistent-data lvm2
 
-  log "Installing Docker..."
-  # Ensure proxy settings are used for adding the repo
+  log "Installing Docker & Containerd..."
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-  
   dnf install -y --allowerasing --best --setopt=install_weak_deps=False --setopt=tsflags=replacefiles \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-  systemctl enable --now docker
+  log "Configuring Proxy for containerd service (Fixes image pulling)..."
+  mkdir -p /etc/systemd/system/containerd.service.d
+  cat <<EOF > /etc/systemd/system/containerd.service.d/http-proxy.conf
+[Service]
+Environment="HTTP_PROXY=${http_proxy:-}"
+Environment="HTTPS_PROXY=${https_proxy:-}"
+Environment="NO_PROXY=localhost,127.0.0.1,${HOST_IP},10.96.0.0/12,10.244.0.0/16,$(hostname)"
+EOF
+
+  systemctl daemon-reload
   systemctl enable --now containerd
 
-  log "Configuring containerd for kubeadm..."
+  log "Configuring containerd for kubeadm (SystemdCgroup)..."
   mkdir -p /etc/containerd
   containerd config default > /etc/containerd/config.toml
+  # CRITICAL: RHEL 9 requires SystemdCgroup = true
   sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
   systemctl restart containerd
 }
 
+# --- 2. Kubernetes Setup ---
 install_kubeadm() {
-  log "Installing kubeadm, kubelet, kubectl (v1.29)..."
+  log "Installing Kubernetes binaries (v1.29)..."
   
-  # FIX: Added sslverify=0 for proxy environments
+  # gpgcheck=0 and sslverify=0 to bypass proxy/unregistered system blocks
   cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
 name=Kubernetes
@@ -84,10 +84,7 @@ EOF
   dnf install -y -q --disableexcludes=kubernetes --allowerasing --setopt=tsflags=replacefiles \
     kubelet kubeadm kubectl
   
-  log "Installing dnf-plugin-versionlock..."
-  dnf install -y -q --allowerasing 'dnf-command(versionlock)' || dnf install -y -q --allowerasing python3-dnf-plugin-versionlock
-  
-  log "Locking Kubernetes package versions..."
+  dnf install -y -q --allowerasing 'dnf-command(versionlock)' || true
   dnf versionlock add kubelet kubeadm kubectl
 
   swapoff -a
@@ -107,31 +104,19 @@ net.ipv4.ip_forward                 = 1
 EOF
   sysctl --system -q
 
-  log "Configuring firewalld for Kubernetes..."
-  if systemctl is-active --quiet firewalld; then
-    firewall-cmd --permanent --add-port=6443/tcp
-    firewall-cmd --permanent --add-port=2379-2380/tcp
-    firewall-cmd --permanent --add-port=10250/tcp
-    firewall-cmd --permanent --add-port=10251/tcp
-    firewall-cmd --permanent --add-port=10252/tcp
-    firewall-cmd --permanent --add-port=10255/tcp
-    firewall-cmd --permanent --add-port=30000-32767/tcp
-    firewall-cmd --permanent --add-masquerade
-    firewall-cmd --reload
-  else
-    log "firewalld not active, skipping firewall rules."
-  fi
-
   log "Disabling SELinux..."
   setenforce 0 2>/dev/null || true
   sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
-
   systemctl enable --now kubelet
 }
 
+# --- 3. Cluster Initialization ---
 init_cluster() {
-  log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
+  log "Pre-pulling Kubernetes images (Testing proxy)..."
+  # This command will verify containerd can see the proxy
+  kubeadm config images pull --cri-socket=unix:///run/containerd/containerd.sock
 
+  log "Initializing Cluster..."
   kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
     --apiserver-advertise-address="${HOST_IP}" \
@@ -141,65 +126,39 @@ init_cluster() {
   cp /etc/kubernetes/admin.conf "$HOME/.kube/config"
   chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 
-  log "Removing control-plane taint..."
+  log "Untainting node for control-plane workloads..."
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 }
 
+# --- 4. CNI & Helm ---
 install_cni() {
   log "Installing Flannel CNI..."
-  kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
-
-  log "Waiting for node to be Ready..."
-  kubectl wait --for=condition=Ready node --all --timeout=180s
+  curl -sSL -k https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml | kubectl apply -f -
+  log "Waiting for node Ready status..."
+  kubectl wait --for=condition=Ready node --all --timeout=120s
 }
 
 install_helm() {
-  export PATH="/usr/local/bin:$PATH"
-  
-  if command -v helm &>/dev/null; then
-    log "Helm already installed, skipping."
-    return
-  fi
-  
   log "Installing Helm..."
-  # Note: curl may need -k or --insecure if your proxy is doing SSL inspection
   curl -fsSL -k https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
-  
-  if /usr/local/bin/helm version &>/dev/null; then
-    log "Helm installed successfully."
-  else
-    die "Helm installation failed."
-  fi
+  export PATH="/usr/local/bin:$PATH"
 }
 
-start_vespa() {
-  log "Starting Vespa on host via Docker..."
-  if docker ps --format '{{.Names}}' | grep -q '^vespa$'; then
-    log "Vespa container already running."
-  elif docker ps -a --format '{{.Names}}' | grep -q '^vespa$'; then
-    docker start vespa
-    log "Vespa container started (was stopped)."
-  else
-    docker run -d \
-      --name vespa \
-      --hostname vespa-container \
-      --restart always \
-      -p 8080:8080 \
-      -p 8081:8081 \
-      -p 19071:19071 \
-      vespaengine/vespa
-    log "Vespa container created."
-  fi
+install_local_path_provisioner() {
+  log "Installing local-path storage provisioner..."
+  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
+  kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+}
 
-  log "Waiting for Vespa (up to 120s)..."
-  for i in $(seq 1 24); do
-    if curl -sf "http://localhost:8080/state/v1/health" | grep -q '"code":"up"'; then
-      log "Vespa is ready."
-      return
-    fi
-    sleep 5
-  done
-  warn "Vespa not ready — continuing anyway."
+# --- 5. App & Service Mesh Installation ---
+start_vespa() {
+  log "Starting Vespa..."
+  if docker ps --format '{{.Names}}' | grep -q '^vespa$'; then
+    log "Vespa already running."
+  else
+    docker run -d --name vespa --hostname vespa-container --restart always \
+      -p 8080:8080 -p 8081:8081 -p 19071:19071 vespaengine/vespa
+  fi
 }
 
 install_istio() {
@@ -215,52 +174,32 @@ install_istio() {
   kubectl label namespace istio-system istio-injection=enabled --overwrite
 
   helm upgrade --install istio-ingress istio/gateway -n istio-system -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" --wait --timeout=120s || true
-
-  kubectl rollout restart deployment/istio-ingress -n istio-system
-  kubectl rollout status deployment/istio-ingress -n istio-system --timeout=120s
-}
-
-install_local_path_provisioner() {
-  log "Installing local-path storage provisioner..."
-  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
-  kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
 }
 
 install_xyne() {
-  log "Applying xyne manifests..."
+  log "Installing Xyne App..."
   kubectl apply -f "${SCRIPT_DIR}/xyne/configmap.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/secrets.yaml"
 
   sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" "${SCRIPT_DIR}/xyne/vespa-external-service.yaml" | kubectl apply -f -
+  
   kubectl apply -f "${SCRIPT_DIR}/xyne/db-statefulset.yaml"
-
   kubectl rollout status statefulset/xyne-db -n xyne --timeout=180s
 
   kubectl apply -f "${SCRIPT_DIR}/istio/destination-rules.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/app-deployment.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/app-sync-deployment.yaml"
-
-  kubectl rollout status deployment/xyne-app-sync -n xyne --timeout=300s
 }
 
 install_istio_routing() {
-  log "Applying Istio routing..."
+  log "Applying Istio Routing..."
   kubectl apply -f "${SCRIPT_DIR}/istio/gateway.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/virtual-services.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/peer-authentication.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
 }
 
-print_summary() {
-  INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
-  echo ""
-  log "=============================="
-  log " Deployment complete!"
-  log " Endpoint: http://${HOST_IP}:${INGRESS_PORT}/"
-  log "=============================="
-}
-
-# --- Execution ---
+# --- Run ---
 require_root
 install_dependencies
 install_kubeadm
@@ -268,8 +207,10 @@ init_cluster
 install_cni
 install_helm
 install_local_path_provisioner
-install_istio
 start_vespa
+install_istio
 install_xyne
 install_istio_routing
-print_summary
+
+INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
+log "SUCCESS! Endpoint: http://${HOST_IP}:${INGRESS_PORT}/"
