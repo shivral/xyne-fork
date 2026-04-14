@@ -137,8 +137,11 @@ init_cluster() {
     mirror="${IMAGES[$target]}"
     docker pull "$mirror"
     docker tag "$mirror" "$target"
-    docker save "$target" | ctr -n k8s.io images import -
+    docker save "$target" | ctr -n k8s.io images import --base-name "$target" -
   done
+
+  log "Images now in containerd k8s.io namespace:"
+  ctr -n k8s.io images ls | grep registry.k8s.io
 
   kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
