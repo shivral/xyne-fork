@@ -33,7 +33,8 @@ spec:
         fsGroup: 999
       initContainers:
         - name: init-permissions
-          image: busybox
+          image: docker.io/library/busybox:latest
+          imagePullPolicy: Never
           securityContext:
             runAsUser: 0
           command:

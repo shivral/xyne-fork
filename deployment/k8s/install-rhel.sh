@@ -307,15 +307,15 @@ start_vespa() {
     log "Vespa container created and started."
   fi
 
-  log "Waiting for Vespa to be ready (up to 120s)..."
-  for i in $(seq 1 24); do
-    if curl -sf "http://localhost:8080/state/v1/health" | grep -q '"code":"up"'; then
+  log "Waiting for Vespa to be ready (up to 300s)..."
+  for i in $(seq 1 60); do
+    if no_proxy="localhost,127.0.0.1" curl -sf "http://localhost:8080/state/v1/health" | grep -q '"code":"up"'; then
       log "Vespa is ready."
       return
     fi
     sleep 5
   done
-  warn "Vespa not ready after 120s — continuing anyway. Check: docker logs vespa"
+  warn "Vespa not ready after 300s — continuing anyway. Check: docker logs vespa"
 }
 
 install_istio() {
