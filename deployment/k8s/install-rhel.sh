@@ -22,6 +22,11 @@ install_dependencies() {
   log "Cleaning dnf cache..."
   dnf clean all
   dnf makecache
+
+  log "Rebuilding CA trust store to remove certs with negative serial numbers..."
+  dnf reinstall -y ca-certificates 2>/dev/null || dnf install -y ca-certificates
+  update-ca-trust force-enable
+  update-ca-trust extract
   
   log "Removing conflicting packages before update..."
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
@@ -52,28 +57,10 @@ install_dependencies() {
   systemctl enable --now docker
   systemctl enable --now containerd
 
-  mkdir -p /etc/docker
-  cat > /etc/docker/daemon.json <<'EOF'
-{
-  "insecure-registries": ["registry.k8s.io"]
-}
-EOF
-  systemctl restart docker
-
   log "Configuring containerd for kubeadm..."
   mkdir -p /etc/containerd
   containerd config default > /etc/containerd/config.toml
   sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-  sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|' /etc/containerd/config.toml
-
-  mkdir -p /etc/containerd/certs.d/registry.k8s.io
-  cat > /etc/containerd/certs.d/registry.k8s.io/hosts.toml <<'EOF'
-server = "https://registry.k8s.io"
-
-[host."https://registry.k8s.io"]
-  capabilities = ["pull", "resolve"]
-  skip_verify = true
-EOF
 
   systemctl restart containerd
 }
@@ -142,17 +129,14 @@ init_cluster() {
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
   log "Pre-pulling kubeadm images via Docker then importing into containerd..."
-  KUBEADM_IMAGES=$(kubeadm config images list --kubernetes-version=v1.29 2>/dev/null) || KUBEADM_IMAGES="
-registry.k8s.io/kube-apiserver:v1.29.0
-registry.k8s.io/kube-controller-manager:v1.29.0
-registry.k8s.io/kube-scheduler:v1.29.0
-registry.k8s.io/kube-proxy:v1.29.0
-registry.k8s.io/coredns/coredns:v1.11.1
-registry.k8s.io/pause:3.9
-registry.k8s.io/etcd:3.5.10-0
-"
-  echo "$KUBEADM_IMAGES" | while read -r image; do
-    [[ -z "$image" ]] && continue
+  for image in \
+    registry.k8s.io/kube-apiserver:v1.29.0 \
+    registry.k8s.io/kube-controller-manager:v1.29.0 \
+    registry.k8s.io/kube-scheduler:v1.29.0 \
+    registry.k8s.io/kube-proxy:v1.29.0 \
+    registry.k8s.io/coredns/coredns:v1.11.1 \
+    registry.k8s.io/pause:3.9 \
+    registry.k8s.io/etcd:3.5.10-0; do
     docker pull "$image"
     docker save "$image" | ctr -n k8s.io images import -
   done
