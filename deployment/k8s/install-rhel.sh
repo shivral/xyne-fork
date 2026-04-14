@@ -215,6 +215,19 @@ EOF
 
 install_cni() {
   log "Installing Flannel CNI..."
+
+  log "Pre-pulling Flannel images via Docker then importing into containerd..."
+  declare -A FLANNEL_IMAGES=(
+    ["ghcr.io/flannel-io/flannel:v0.28.2"]="flannel/flannel:v0.28.2"
+    ["ghcr.io/flannel-io/flannel-cni-plugin:v1.9.0-flannel1"]="flannel/flannel-cni-plugin:v1.9.0-flannel1"
+  )
+  for target in "${!FLANNEL_IMAGES[@]}"; do
+    mirror="${FLANNEL_IMAGES[$target]}"
+    docker pull "$mirror"
+    docker tag "$mirror" "$target"
+    docker save "$target" | ctr -n k8s.io images import --base-name "$target" -
+  done
+
   curl -fsSLk https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml \
     | kubectl apply -f -
 
