@@ -88,8 +88,8 @@ spec:
       serviceAccountName: local-path-provisioner-service-account
       containers:
         - name: local-path-provisioner
-          image: rancher/local-path-provisioner:v0.0.26
-          imagePullPolicy: IfNotPresent
+          image: docker.io/rancher/local-path-provisioner:v0.0.26
+          imagePullPolicy: Never
           command:
             - local-path-provisioner
             - --debug

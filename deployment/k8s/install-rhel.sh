@@ -365,10 +365,10 @@ install_istio() {
 install_local_path_provisioner() {
   log "Installing local-path storage provisioner..."
 
-  for image in rancher/local-path-provisioner:v0.0.26; do
-    docker pull "$image"
-    docker save "$image" | ctr -n k8s.io images import --base-name "$image" -
-  done
+  docker pull rancher/local-path-provisioner:v0.0.26
+  docker save rancher/local-path-provisioner:v0.0.26 -o /tmp/local-path-provisioner.tar
+  ctr -n k8s.io images import --base-name "docker.io/rancher/local-path-provisioner:v0.0.26" /tmp/local-path-provisioner.tar
+  rm -f /tmp/local-path-provisioner.tar
 
   docker pull rancher/busybox:1.31.1
   docker tag rancher/busybox:1.31.1 docker.io/library/busybox:latest
