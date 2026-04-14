@@ -59,7 +59,8 @@ spec:
               mountPath: /app-downloads
       containers:
         - name: xyne-app
-          image: xynehq/xyne:latest
+          image: docker.io/xynehq/xyne:latest
+          imagePullPolicy: Never
           env:
             - name: ENCRYPTION_KEY
               value: "Mn/oXPQn5CfCGEVTkguyxJHyo/hs6kB1AjylWzwINSg="

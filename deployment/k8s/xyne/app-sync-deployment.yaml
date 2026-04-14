@@ -32,7 +32,8 @@ spec:
         fsGroup: 1000
       containers:
         - name: xyne-app-sync
-          image: xynehq/xyne:latest
+          image: docker.io/xynehq/xyne:latest
+          imagePullPolicy: Never
           command: ["bun", "run", "dev:sync"]
           ports:
             - containerPort: 3010

@@ -390,7 +390,9 @@ install_xyne() {
     "postgis/postgis:15-3.5-alpine" \
     "xynehq/xyne:latest"; do
     docker pull "$image"
-    docker save "$image" | ctr -n k8s.io images import --base-name "docker.io/$image" -
+    docker save "$image" -o /tmp/xyne-image.tar
+    ctr -n k8s.io images import --base-name "docker.io/${image}" /tmp/xyne-image.tar
+    rm -f /tmp/xyne-image.tar
   done
 
   log "Patching Vespa Endpoints with host IP: ${HOST_IP}..."
