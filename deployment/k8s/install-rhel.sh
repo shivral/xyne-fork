@@ -341,12 +341,14 @@ install_istio() {
     -n istio-system \
     --version "${ISTIO_VERSION}" \
     -f "${SCRIPT_DIR}/helm/istio-base-values.yaml" \
+    --insecure-skip-tls-verify \
     --wait
 
   helm upgrade --install istiod istio/istiod \
     -n istio-system \
     --version "${ISTIO_VERSION}" \
     -f "${SCRIPT_DIR}/helm/istiod-values.yaml" \
+    --insecure-skip-tls-verify \
     --wait
 
   kubectl label namespace istio-system istio-injection=enabled --overwrite
@@ -355,6 +357,7 @@ install_istio() {
     -n istio-system \
     --version "${ISTIO_VERSION}" \
     -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" \
+    --insecure-skip-tls-verify \
     --wait --timeout=120s || true
 
   log "Waiting for istio-ingress pod to be ready..."
