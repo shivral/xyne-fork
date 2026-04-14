@@ -131,7 +131,7 @@ init_cluster() {
     ["registry.k8s.io/kube-proxy:v1.29.0"]="docker/desktop-kubernetes-proxy:v1.29.0"
     ["registry.k8s.io/coredns/coredns:v1.11.1"]="docker/desktop-kubernetes-coredns:v1.11.1"
     ["registry.k8s.io/pause:3.9"]="docker/desktop-kubernetes-pause:3.9"
-    ["registry.k8s.io/etcd:3.5.10-0"]="docker/desktop-kubernetes-etcd:3.5.10-0"
+    ["registry.k8s.io/etcd:3.5.16-0"]="docker/desktop-kubernetes-etcd:3.5.16-0"
   )
   for target in "${!IMAGES[@]}"; do
     mirror="${IMAGES[$target]}"
