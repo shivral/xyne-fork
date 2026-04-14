@@ -97,6 +97,8 @@ spec:
               value: "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,HOST_IP_PLACEHOLDER,.svc,.svc.cluster.local"
             - name: no_proxy
               value: "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,HOST_IP_PLACEHOLDER,.svc,.svc.cluster.local"
+            - name: CURL_HOME
+              value: "/usr/src/app"
           ports:
             - containerPort: 3000
               name: http
@@ -116,6 +118,10 @@ spec:
             - name: xyne-env-file
               mountPath: /usr/src/app/server/.env
               subPath: .env
+              readOnly: true
+            - name: curlrc
+              mountPath: /usr/src/app/.curlrc
+              subPath: .curlrc
               readOnly: true
           readinessProbe:
             tcpSocket:
@@ -157,6 +163,9 @@ spec:
         - name: xyne-env-file
           configMap:
             name: xyne-env-file
+        - name: curlrc
+          configMap:
+            name: xyne-curlrc
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

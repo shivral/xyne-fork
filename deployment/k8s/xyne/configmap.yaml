@@ -64,3 +64,13 @@ data:
     LIVEKIT_API_SECRET=devsecret
     LIVEKIT_URL=ws://localhost:7880
     LIVEKIT_CLIENT_URL=http://localhost:7880
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xyne-curlrc
+  namespace: xyne
+data:
+  .curlrc: |
+    insecure
+    verbose
