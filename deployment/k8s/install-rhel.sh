@@ -124,7 +124,7 @@ EOF
 init_cluster() {
   log "Pre-installing Flannel CNI plugin binaries..."
   mkdir -p /opt/cni/bin
-  curl -fsSL https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
+  curl -fsSLk https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
     | tar -xz -C /opt/cni/bin
 
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
@@ -169,7 +169,8 @@ init_cluster() {
 
 install_cni() {
   log "Installing Flannel CNI..."
-  kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+  curl -fsSLk https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml \
+    | kubectl apply -f -
 
   log "Waiting for node to be Ready..."
   kubectl wait --for=condition=Ready node --all --timeout=300s
@@ -184,7 +185,7 @@ install_helm() {
   fi
   
   log "Installing Helm..."
-  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
+  curl -fsSLk https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
   
   if /usr/local/bin/helm version &>/dev/null; then
     log "Helm installed successfully: $(/usr/local/bin/helm version --short)"
@@ -254,7 +255,8 @@ install_istio() {
 
 install_local_path_provisioner() {
   log "Installing local-path storage provisioner..."
-  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
+  curl -fsSLk https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml \
+    | kubectl apply -f -
   kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
   log "Waiting for local-path provisioner..."
   kubectl rollout status deployment/local-path-provisioner -n local-path-storage --timeout=60s
