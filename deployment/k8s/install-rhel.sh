@@ -123,8 +123,10 @@ EOF
 
 init_cluster() {
   log "Resetting any previous kubeadm state..."
+  systemctl stop kubelet 2>/dev/null || true
   kubeadm reset -f 2>/dev/null || true
   rm -rf /etc/kubernetes /var/lib/etcd /var/lib/kubelet/config.yaml
+  systemctl stop kubelet 2>/dev/null || true
 
   log "Pre-installing Flannel CNI plugin binaries..."
   mkdir -p /opt/cni/bin
@@ -156,7 +158,6 @@ EOF
 
   systemctl daemon-reload
   systemctl restart containerd
-  systemctl restart kubelet
 
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
