@@ -44,6 +44,8 @@ metadata:
 spec:
   host: xyne-db
   trafficPolicy:
+    tls:
+      mode: DISABLE
     connectionPool:
       tcp:
         maxConnections: 100

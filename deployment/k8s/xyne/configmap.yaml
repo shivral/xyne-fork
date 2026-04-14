@@ -28,7 +28,7 @@ data:
     DATABASE_PORT=5432
     DATABASE_USER=xyne
     DATABASE_PASSWORD=xyne
-    DATABASE_URL=postgresql://xyne:xyne@xyne-db:5432/xyne
+    DATABASE_URL=postgresql://xyne:xyne@xyne-db:5432/xyne?sslmode=disable
     POSTGRES_PASSWORD=xyne
     VESPA_HOST=vespa
     VESPA_FEED_PORT=8080
