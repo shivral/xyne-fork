@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_IP=$(hostname -I | awk '{print $1}')
 
+export NO_PROXY="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${HOST_IP},.svc,.svc.cluster.local"
+export no_proxy="${NO_PROXY}"
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -134,11 +137,13 @@ init_cluster() {
     | tar -xz -C /opt/cni/bin
 
   log "Disabling proxy for kubelet and containerd to avoid TLS issues..."
+  NO_PROXY_LIST="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${HOST_IP},.svc,.svc.cluster.local"
+
   mkdir -p /etc/systemd/system/kubelet.service.d
-  cat > /etc/systemd/system/kubelet.service.d/no-proxy.conf <<'EOF'
+  cat > /etc/systemd/system/kubelet.service.d/no-proxy.conf <<EOF
 [Service]
-Environment="NO_PROXY=*"
-Environment="no_proxy=*"
+Environment="NO_PROXY=${NO_PROXY_LIST}"
+Environment="no_proxy=${NO_PROXY_LIST}"
 Environment="HTTP_PROXY="
 Environment="HTTPS_PROXY="
 Environment="http_proxy="
@@ -146,10 +151,10 @@ Environment="https_proxy="
 EOF
 
   mkdir -p /etc/systemd/system/containerd.service.d
-  cat > /etc/systemd/system/containerd.service.d/no-proxy.conf <<'EOF'
+  cat > /etc/systemd/system/containerd.service.d/no-proxy.conf <<EOF
 [Service]
-Environment="NO_PROXY=*"
-Environment="no_proxy=*"
+Environment="NO_PROXY=${NO_PROXY_LIST}"
+Environment="no_proxy=${NO_PROXY_LIST}"
 Environment="HTTP_PROXY="
 Environment="HTTPS_PROXY="
 Environment="http_proxy="
