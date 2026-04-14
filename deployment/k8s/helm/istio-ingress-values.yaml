@@ -1,3 +1,5 @@
+imagePullPolicy: Never
+
 service:
   type: NodePort
   ports:

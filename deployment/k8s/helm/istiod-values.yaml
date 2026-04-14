@@ -10,6 +10,7 @@ pilot:
   replicaCount: 1
 
 global:
+  imagePullPolicy: Never
   proxy:
     resources:
       requests:
