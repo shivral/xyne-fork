@@ -23,6 +23,10 @@ install_dependencies() {
   dnf clean all
   dnf makecache
   
+  log "Removing conflicting packages before update..."
+  dnf remove -y -q openssl-fips-provider-so 2>/dev/null || true
+  dnf remove -y -q containers-common 2>/dev/null || true
+  
   dnf update -y -q --allowerasing
   dnf install -y -q --allowerasing \
     curl \
@@ -39,10 +43,7 @@ install_dependencies() {
   log "Installing Docker..."
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
   
-  log "Resolving package conflicts..."
-  rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
-  
-  dnf install -y --allowerasing --best --setopt=install_weak_deps=False --setopt=tsflags=replacefiles docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  dnf install -y --allowerasing --best --setopt=install_weak_deps=False docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   systemctl enable --now docker
   systemctl enable --now containerd
