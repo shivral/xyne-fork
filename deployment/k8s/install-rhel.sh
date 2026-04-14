@@ -133,9 +133,20 @@ EOF
 init_cluster() {
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
-  log "Pre-pulling kubeadm images via ctr (skipping TLS verification)..."
-  kubeadm config images list --kubernetes-version=v1.29 2>/dev/null | while read -r image; do
-    ctr -n k8s.io images pull --skip-verify "$image" || true
+  log "Pre-pulling kubeadm images via Docker then importing into containerd..."
+  KUBEADM_IMAGES=$(kubeadm config images list --kubernetes-version=v1.29 2>/dev/null) || KUBEADM_IMAGES="
+registry.k8s.io/kube-apiserver:v1.29.0
+registry.k8s.io/kube-controller-manager:v1.29.0
+registry.k8s.io/kube-scheduler:v1.29.0
+registry.k8s.io/kube-proxy:v1.29.0
+registry.k8s.io/coredns/coredns:v1.11.1
+registry.k8s.io/pause:3.9
+registry.k8s.io/etcd:3.5.10-0
+"
+  echo "$KUBEADM_IMAGES" | while read -r image; do
+    [[ -z "$image" ]] && continue
+    docker pull "$image"
+    docker save "$image" | ctr -n k8s.io images import -
   done
 
   kubeadm init \
