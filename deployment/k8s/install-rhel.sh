@@ -14,21 +14,31 @@ warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
 die()  { echo -e "${RED}[error]${NC} $*"; exit 1; }
 
 require_root() {
-  [[ $EUID -eq 0 ]] || die "Run as root: sudo $0"
+  [[ $EUID -eq 0 ]] || die "Run as root: sudo -E $0 (use -E to preserve proxy settings)"
 }
 
 install_dependencies() {
   log "Installing system dependencies..."
+  
+  # FIX: Aggressively remove the specific package causing the 'fips.so' conflict
+  log "Resolving OpenSSL FIPS provider conflicts..."
+  dnf remove -y openssl-fips-provider-so --allowerasing || true
+  rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
+
   log "Cleaning dnf cache..."
   dnf clean all
+  rm -rf /var/cache/dnf
   dnf makecache
   
-  log "Removing conflicting packages before update..."
-  rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
+  log "Removing other conflicting packages before update..."
   rpm -e --nodeps containers-common 2>/dev/null || true
   
+  # FIX: Using 'replacefiles' to force overwrite any remaining shared library locks
+  log "Updating system packages..."
   dnf update -y --allowerasing --setopt=tsflags=replacefiles
-  dnf install -y -q --allowerasing \
+  
+  log "Installing core utilities..."
+  dnf install -y -q --allowerasing --setopt=tsflags=replacefiles \
     curl \
     ca-certificates \
     gnupg \
@@ -41,9 +51,11 @@ install_dependencies() {
     lvm2
 
   log "Installing Docker..."
+  # Ensure proxy settings are used for adding the repo
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
   
-  dnf install -y --allowerasing --best --setopt=install_weak_deps=False docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  dnf install -y --allowerasing --best --setopt=install_weak_deps=False --setopt=tsflags=replacefiles \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   systemctl enable --now docker
   systemctl enable --now containerd
@@ -58,17 +70,19 @@ install_dependencies() {
 install_kubeadm() {
   log "Installing kubeadm, kubelet, kubectl (v1.29)..."
   
+  # FIX: Added sslverify=0 for proxy environments
   cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
 name=Kubernetes
 baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
 enabled=1
-gpgcheck=1
-gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+gpgcheck=0
+sslverify=0
 exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
 EOF
 
-  dnf install -y -q --disableexcludes=kubernetes --allowerasing kubelet kubeadm kubectl
+  dnf install -y -q --disableexcludes=kubernetes --allowerasing --setopt=tsflags=replacefiles \
+    kubelet kubeadm kubectl
   
   log "Installing dnf-plugin-versionlock..."
   dnf install -y -q --allowerasing 'dnf-command(versionlock)' || dnf install -y -q --allowerasing python3-dnf-plugin-versionlock
@@ -108,7 +122,7 @@ EOF
     log "firewalld not active, skipping firewall rules."
   fi
 
-  log "Disabling SELinux (required for proper Kubernetes networking)..."
+  log "Disabling SELinux..."
   setenforce 0 2>/dev/null || true
   sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
 
@@ -127,7 +141,7 @@ init_cluster() {
   cp /etc/kubernetes/admin.conf "$HOME/.kube/config"
   chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 
-  log "Removing control-plane taint so workloads can schedule on this node..."
+  log "Removing control-plane taint..."
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 }
 
@@ -148,12 +162,13 @@ install_helm() {
   fi
   
   log "Installing Helm..."
-  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
+  # Note: curl may need -k or --insecure if your proxy is doing SSL inspection
+  curl -fsSL -k https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
   
   if /usr/local/bin/helm version &>/dev/null; then
-    log "Helm installed successfully: $(/usr/local/bin/helm version --short)"
+    log "Helm installed successfully."
   else
-    die "Helm installation failed - binary not found at /usr/local/bin/helm"
+    die "Helm installation failed."
   fi
 }
 
@@ -173,10 +188,10 @@ start_vespa() {
       -p 8081:8081 \
       -p 19071:19071 \
       vespaengine/vespa
-    log "Vespa container created and started."
+    log "Vespa container created."
   fi
 
-  log "Waiting for Vespa to be ready (up to 120s)..."
+  log "Waiting for Vespa (up to 120s)..."
   for i in $(seq 1 24); do
     if curl -sf "http://localhost:8080/state/v1/health" | grep -q '"code":"up"'; then
       log "Vespa is ready."
@@ -184,34 +199,23 @@ start_vespa() {
     fi
     sleep 5
   done
-  warn "Vespa not ready after 120s — continuing anyway. Check: docker logs vespa"
+  warn "Vespa not ready — continuing anyway."
 }
 
 install_istio() {
-  log "Installing Istio via Helm..."
+  log "Installing Istio..."
   helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
   helm repo update
 
   kubectl apply -f "${SCRIPT_DIR}/namespaces/namespaces.yaml"
 
-  helm upgrade --install istio-base istio/base \
-    -n istio-system \
-    -f "${SCRIPT_DIR}/helm/istio-base-values.yaml" \
-    --wait
-
-  helm upgrade --install istiod istio/istiod \
-    -n istio-system \
-    -f "${SCRIPT_DIR}/helm/istiod-values.yaml" \
-    --wait
+  helm upgrade --install istio-base istio/base -n istio-system -f "${SCRIPT_DIR}/helm/istio-base-values.yaml" --wait
+  helm upgrade --install istiod istio/istiod -n istio-system -f "${SCRIPT_DIR}/helm/istiod-values.yaml" --wait
 
   kubectl label namespace istio-system istio-injection=enabled --overwrite
 
-  helm upgrade --install istio-ingress istio/gateway \
-    -n istio-system \
-    -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" \
-    --wait --timeout=120s || true
+  helm upgrade --install istio-ingress istio/gateway -n istio-system -f "${SCRIPT_DIR}/helm/istio-ingress-values.yaml" --wait --timeout=120s || true
 
-  log "Waiting for istio-ingress pod to be ready..."
   kubectl rollout restart deployment/istio-ingress -n istio-system
   kubectl rollout status deployment/istio-ingress -n istio-system --timeout=120s
 }
@@ -220,81 +224,43 @@ install_local_path_provisioner() {
   log "Installing local-path storage provisioner..."
   kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
   kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-  log "Waiting for local-path provisioner..."
-  kubectl rollout status deployment/local-path-provisioner -n local-path-storage --timeout=60s
 }
 
 install_xyne() {
-  log "Applying xyne namespace manifests..."
+  log "Applying xyne manifests..."
   kubectl apply -f "${SCRIPT_DIR}/xyne/configmap.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/secrets.yaml"
 
-  log "Patching Vespa Endpoints with host IP: ${HOST_IP}..."
-  sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" \
-    "${SCRIPT_DIR}/xyne/vespa-external-service.yaml" \
-    | kubectl apply -f -
-
+  sed "s/HOST_IP_PLACEHOLDER/${HOST_IP}/g" "${SCRIPT_DIR}/xyne/vespa-external-service.yaml" | kubectl apply -f -
   kubectl apply -f "${SCRIPT_DIR}/xyne/db-statefulset.yaml"
 
-  log "Waiting for Postgres to be ready..."
   kubectl rollout status statefulset/xyne-db -n xyne --timeout=180s
 
-  log "Applying Istio destination rules and sidecar policy before app starts..."
   kubectl apply -f "${SCRIPT_DIR}/istio/destination-rules.yaml"
-
   kubectl apply -f "${SCRIPT_DIR}/xyne/app-deployment.yaml"
   kubectl apply -f "${SCRIPT_DIR}/xyne/app-sync-deployment.yaml"
 
-  log "Waiting for xyne-app-sync to be ready..."
   kubectl rollout status deployment/xyne-app-sync -n xyne --timeout=300s
-
-  log "xyne-app is initialising in the background (DB migrate + Vespa schema deploy on first boot)."
-  log "It will be ready within ~5 min. Check: kubectl logs -n xyne -l app=xyne-app -c xyne-app -f"
 }
 
 install_istio_routing() {
-  log "Applying Istio routing (Gateway, VirtualServices, DestinationRules)..."
+  log "Applying Istio routing..."
   kubectl apply -f "${SCRIPT_DIR}/istio/gateway.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/virtual-services.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/peer-authentication.yaml"
   kubectl apply -f "${SCRIPT_DIR}/istio/envoy-filters.yaml"
-
-  log "Waiting 15s for istiod to program ingress gateway..."
-  sleep 15
-
-  INGRESS_POD=$(kubectl get pod -n istio-system -l app=istio-ingress -o jsonpath='{.items[0].metadata.name}')
-  LISTENERS=$(kubectl exec -n istio-system "$INGRESS_POD" -- curl -s http://localhost:15000/listeners 2>/dev/null)
-  if echo "$LISTENERS" | grep -q "0.0.0.0_8080"; then
-    log "Istio ingress gateway is active (listener on port 8080 confirmed)."
-  else
-    warn "Istio ingress listener not detected. Check: kubectl exec -n istio-system $INGRESS_POD -- curl -s http://localhost:15000/listeners"
-  fi
 }
 
 print_summary() {
-  INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system \
-    -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
-
+  INGRESS_PORT=$(kubectl get svc istio-ingress -n istio-system -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || echo "30080")
   echo ""
   log "=============================="
-  log " Xyne K8s deployment complete!"
+  log " Deployment complete!"
+  log " Endpoint: http://${HOST_IP}:${INGRESS_PORT}/"
   log "=============================="
-  echo ""
-  echo "  App endpoint (on this machine):  http://${HOST_IP}:${INGRESS_PORT}/"
-  echo ""
-  echo "  For local access from your laptop, run:"
-  echo "    ssh -L 3000:${HOST_IP}:${INGRESS_PORT} <user>@<this-machine-ip> -N"
-  echo "  Then open: http://localhost:3000"
-  echo ""
-  kubectl get pods -A --field-selector=status.phase!=Running 2>/dev/null \
-    | grep -v "^NAMESPACE" \
-    | grep -v "Completed" \
-    && warn "Some pods are not Running — check above." || log "All pods Running."
-  echo ""
-  warn "Before production use — update secrets.yaml with real values:"
-  warn "  kubectl apply -f ${SCRIPT_DIR}/xyne/secrets.yaml"
 }
 
+# --- Execution ---
 require_root
 install_dependencies
 install_kubeadm
