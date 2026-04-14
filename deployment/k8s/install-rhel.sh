@@ -122,6 +122,11 @@ EOF
 }
 
 init_cluster() {
+  log "Pre-installing Flannel CNI plugin binaries..."
+  mkdir -p /opt/cni/bin
+  curl -fsSL https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-amd64-v1.4.0.tgz \
+    | tar -xz -C /opt/cni/bin
+
   log "Initializing kubeadm single-node cluster (IP: ${HOST_IP})..."
 
   log "Pre-pulling kubeadm images via Docker Hub then importing into containerd..."
@@ -167,7 +172,7 @@ install_cni() {
   kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 
   log "Waiting for node to be Ready..."
-  kubectl wait --for=condition=Ready node --all --timeout=180s
+  kubectl wait --for=condition=Ready node --all --timeout=300s
 }
 
 install_helm() {
