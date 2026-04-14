@@ -242,15 +242,19 @@ install_cni() {
 
 install_helm() {
   export PATH="/usr/local/bin:$PATH"
-  
+
   if command -v helm &>/dev/null; then
     log "Helm already installed, skipping."
     return
   fi
-  
+
   log "Installing Helm..."
-  curl -fsSLk https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || true
-  
+  HELM_VERSION="v3.14.0"
+  curl -fsSLk "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+    | tar -xz -C /tmp
+  mv /tmp/linux-amd64/helm /usr/local/bin/helm
+  chmod +x /usr/local/bin/helm
+
   if /usr/local/bin/helm version &>/dev/null; then
     log "Helm installed successfully: $(/usr/local/bin/helm version --short)"
   else
