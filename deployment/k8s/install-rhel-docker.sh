@@ -82,13 +82,8 @@ pull_images() {
   for image in \
     xynehq/xyne:latest \
     vespaengine/vespa:latest \
-    postgres:15-alpine \
+    postgis/postgis:15-3.5-alpine \
     nginx:1.26-alpine \
-    grafana/grafana:latest \
-    grafana/loki:3.4.1 \
-    grafana/promtail:3.4.1 \
-    prom/prometheus:latest \
-    livekit/livekit-server:v1.9.1 \
     busybox:latest; do
     log "Pulling ${image}..."
     docker pull "$image"
@@ -140,25 +135,25 @@ setup_dirs() {
   log "Creating data directories..."
   cd "${PORTABLE_DIR}"
   DATA_DIR="./data"
-  mkdir -p "${DATA_DIR}"/{postgres-data,vespa-data,app-uploads,app-logs,app-assets,app-migrations,app-downloads,grafana-storage,loki-data,promtail-data,prometheus-data,ollama-data,vespa-models}
+  mkdir -p "${DATA_DIR}"/{postgres-data,vespa-data,app-uploads,app-logs,app-assets,app-migrations,app-downloads,vespa-models}
   mkdir -p "${DATA_DIR}/vespa-data/tmp"
-
-  docker run --rm -v "$(pwd)/${DATA_DIR}/prometheus-data:/data" busybox sh -c 'chown -R 65534:65534 /data' 2>/dev/null || true
-  docker run --rm -v "$(pwd)/${DATA_DIR}/loki-data:/data"       busybox sh -c 'chown -R 10001:10001 /data' 2>/dev/null || true
-  docker run --rm -v "$(pwd)/${DATA_DIR}/promtail-data:/data"   busybox sh -c 'chown -R 10001:10001 /data' 2>/dev/null || true
 
   docker network create xyne 2>/dev/null || true
   log "Directories and network ready."
 }
 
-setup_prometheus() {
+setup_permissions() {
+  log "Setting directory permissions via busybox containers..."
   cd "${PORTABLE_DIR}"
-  if [ -f prometheus-selfhosted.yml.template ]; then
-    set -a && source .env && set +a
-    METRICS_PORT="${METRICS_PORT:-3001}"
-    export METRICS_PORT
-    envsubst < prometheus-selfhosted.yml.template > prometheus-selfhosted.yml
-  fi
+  DATA_DIR="./data"
+
+  for dir in postgres-data vespa-data vespa-models app-uploads app-logs app-assets app-migrations app-downloads; do
+    docker run --rm \
+      -v "$(pwd)/${DATA_DIR}/${dir}:/data" \
+      busybox chown -R 1000:1000 /data 2>/dev/null || true
+  done
+
+  log "Permissions set."
 }
 
 start_services() {
@@ -185,9 +180,7 @@ print_summary() {
   log " Xyne Docker deployment done!"
   log "=============================="
   echo ""
-  echo "  App:       http://${HOST_IP}:3000"
-  echo "  Grafana:   http://${HOST_IP}:3002"
-  echo "  Prometheus: http://${HOST_IP}:9090"
+  echo "  App:  http://${HOST_IP}:3000"
   echo ""
   echo "  SSH tunnel from laptop:"
   echo "    ssh -L 3000:${HOST_IP}:3000 <user>@<this-machine-ip> -N"
@@ -203,6 +196,6 @@ configure_firewall
 pull_images
 setup_env
 setup_dirs
-setup_prometheus
+setup_permissions
 start_services
 print_summary
