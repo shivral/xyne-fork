@@ -7,6 +7,13 @@ PORTABLE_DIR="${SCRIPT_DIR}/../portable"
 PROXY="http://10.201.6.100:1080"
 NO_PROXY_LIST="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.local"
 
+export HTTP_PROXY="${PROXY}"
+export HTTPS_PROXY="${PROXY}"
+export http_proxy="${PROXY}"
+export https_proxy="${PROXY}"
+export NO_PROXY="${NO_PROXY_LIST}"
+export no_proxy="${NO_PROXY_LIST}"
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
