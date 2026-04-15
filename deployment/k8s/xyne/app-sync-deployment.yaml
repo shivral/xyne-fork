@@ -64,6 +64,18 @@ spec:
               value: "e+xRTwiC4mHYWLPEBZELBOD3UCtcmSLu+XbDt/UVVK8="
             - name: REFRESH_TOKEN_SECRET
               value: "UzUPNz3ey/86+5IqEkCUPDK7PHC/wwl2leK3oUzVQeY="
+            - name: HTTPS_PROXY
+              value: "http://10.201.6.100:1080"
+            - name: https_proxy
+              value: "http://10.201.6.100:1080"
+            - name: HTTP_PROXY
+              value: "http://10.201.6.100:1080"
+            - name: http_proxy
+              value: "http://10.201.6.100:1080"
+            - name: NO_PROXY
+              value: "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,HOST_IP_PLACEHOLDER,.svc,.svc.cluster.local"
+            - name: no_proxy
+              value: "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,HOST_IP_PLACEHOLDER,.svc,.svc.cluster.local"
           volumeMounts:
             - name: app-uploads
               mountPath: /usr/src/app/server/storage
