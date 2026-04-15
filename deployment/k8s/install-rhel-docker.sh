@@ -83,8 +83,7 @@ pull_images() {
     xynehq/xyne:latest \
     vespaengine/vespa:latest \
     postgis/postgis:15-3.5-alpine \
-    nginx:1.26-alpine \
-    busybox:latest; do
+    rancher/busybox:1.31.1; do
     log "Pulling ${image}..."
     docker pull "$image"
   done
@@ -150,7 +149,7 @@ setup_permissions() {
   for dir in postgres-data vespa-data vespa-models app-uploads app-logs app-assets app-migrations app-downloads; do
     docker run --rm \
       -v "$(pwd)/${DATA_DIR}/${dir}:/data" \
-      busybox chown -R 1000:1000 /data 2>/dev/null || true
+      rancher/busybox:1.31.1 chown -R 1000:1000 /data 2>/dev/null || true
   done
 
   log "Permissions set."

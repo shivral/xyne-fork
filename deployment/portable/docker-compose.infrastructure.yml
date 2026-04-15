@@ -1,6 +1,6 @@
 services:
   prometheus-init:
-    image: busybox
+    image: rancher/busybox:1.31.1
     volumes:
       - ${XYNE_DATA_DIR:-./data}/prometheus-data:/prometheus
     command: |
@@ -151,7 +151,7 @@ services:
         max-file: "6"
 
   loki-init:
-    image: busybox
+    image: rancher/busybox:1.31.1
     volumes:
       - ${XYNE_DATA_DIR:-./data}/loki-data:/loki-data
     command: |
@@ -197,7 +197,7 @@ services:
       - xyne
 
   promtail-init:
-    image: busybox
+    image: rancher/busybox:1.31.1
     volumes:
       - ${XYNE_DATA_DIR:-./data}/promtail-data:/promtail-data
     command: |

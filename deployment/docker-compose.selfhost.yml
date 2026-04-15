@@ -22,7 +22,7 @@ services:
     
 ## Temporary fix for vespa permission issues until a better solution is found
   vespa-init:
-    image: busybox 
+    image: rancher/busybox:1.31.1 
     container_name: vespa-init
     user: root
     volumes:

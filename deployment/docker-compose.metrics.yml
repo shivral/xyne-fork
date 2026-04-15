@@ -23,7 +23,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   vespa-init:
-    image: busybox
+    image: rancher/busybox:1.31.1
     container_name: vespa-init
     user: root
     volumes:
