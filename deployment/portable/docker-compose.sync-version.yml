@@ -17,8 +17,46 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_HOST=xyne-db
+      - DATABASE_PORT=5432
+      - DATABASE_USER=xyne
+      - DATABASE_PASSWORD=xyne
+      - DATABASE_URL=postgresql://xyne:xyne@xyne-db:5432/xyne?sslmode=disable
+      - POSTGRES_PASSWORD=xyne
       - VESPA_HOST=vespa
+      - VESPA_FEED_PORT=8080
+      - VESPA_QUERY_PORT=8081
+      - VESPA_REQUIRED=false
+      - EMBEDDING_MODEL=bge-small-en-v1.5
+      - REASONING=true
+      - METRICS_PORT=3001
+      - HOST=http://localhost:3000
+      - SYNC_SERVER_HOST=xyne-app-sync
       - MAIN_SERVER_HOST=app
+      - ENCRYPTION_KEY=Mn/oXPQn5CfCGEVTkguyxJHyo/hs6kB1AjylWzwINSg=
+      - JWT_SECRET=dummy-jwt-secret-change-in-production
+      - SERVICE_ACCOUNT_ENCRYPTION_KEY=Yz2+nTJWOwSc3NFRPqEEvYzOi85E/Eeg72wdZVZPTR8=
+      - USER_SECRET=dummy-user-secret
+      - ACCESS_TOKEN_SECRET=e+xRTwiC4mHYWLPEBZELBOD3UCtcmSLu+XbDt/UVVK8=
+      - REFRESH_TOKEN_SECRET=UzUPNz3ey/86+5IqEkCUPDK7PHC/wwl2leK3oUzVQeY=
+      - GOOGLE_CLIENT_ID=REPLACE_WITH_YOUR_GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET=REPLACE_WITH_YOUR_GOOGLE_CLIENT_SECRET
+      - GOOGLE_REDIRECT_URI=http://localhost:3000/v1/auth/callback
+      - GOOGLE_PROD_REDIRECT_URI=http://localhost:3000/v1/auth/callback
+      - LITELLM_BEST_AGENTIC_MODEL=nemotron
+      - LITELLM_FAST_MODEL=nemotron
+      - LITELLM_BEST_MODEL=nemotron
+      - LITELLM_SQL_INFERENCE_MODEL=nemotron
+      - USE_AGENTIC_FILTERING=true
+      - MODELS_LIST=private-large,claude-sonnet-4-6,claude-opus-4-6,nemotron,vertex_ai/claude-haiku-4-5@20251001
+      - AGENTIC_BY_DEFAULT=true
+      - IS_DEMO=true
+      - LITELLM_API_KEY=REPLACE_WITH_YOUR_LITELLM_API_KEY
+      - LITELLM_BASE_URL=https://grid.ai.juspay.net/
+      - LITELLM_MODEL_INFO_URL=https://grid.ai.juspay.net/v1/model/info
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=devsecret
+      - LIVEKIT_URL=ws://localhost:7880
+      - LIVEKIT_CLIENT_URL=http://localhost:7880
       - HTTP_PROXY=http://10.201.6.100:1080
       - HTTPS_PROXY=http://10.201.6.100:1080
       - http_proxy=http://10.201.6.100:1080
