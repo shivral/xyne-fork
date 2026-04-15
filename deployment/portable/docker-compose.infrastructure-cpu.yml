@@ -44,25 +44,6 @@ services:
       - VESPA_CLUSTER_CONTROLLER_JVMARGS=-Xms128m -Xmx256m -XX:+UseG1GC
       - VESPA_METRICS_JVMARGS=-Xms256m -Xmx512m -XX:+UseG1GC
 
-  vespa-deploy:
-    build:
-      context: ../..
-      dockerfile: deployment/portable/vespa-deploy/Dockerfile
-      args:
-        HTTP_PROXY: http://10.201.6.100:1080
-        HTTPS_PROXY: http://10.201.6.100:1080
-        NO_PROXY: localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.local
-    container_name: vespa-deploy
-    depends_on:
-      vespa:
-        condition: service_started
-    environment:
-      - VESPA_CONFIGSERVERS=vespa
-    volumes:
-      - ${XYNE_DATA_DIR:-./data}/vespa-models:/app/vespa/models
-    networks:
-      - xyne
-    restart: "no"
 
   xyne-db:
     image: postgis/postgis:15-3.5-alpine

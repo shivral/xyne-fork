@@ -174,7 +174,6 @@ cleanup_containers() {
                --filter "name=xyne-db" \
                --filter "name=xyne-app" \
                --filter "name=xyne-app-sync" \
-               --filter "name=vespa-deploy" \
     | xargs -r docker rm -f 2>/dev/null || true
   log "Cleanup done."
 }

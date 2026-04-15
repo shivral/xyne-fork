@@ -40,15 +40,14 @@ if [ -f "$TOKENIZER_FILE" ]; then
     echo "Model tokenizer already exists"
 else
     echo "Downloading model tokenizer..."
-    curl -L -o "$TOKENIZER_FILE" "$TOKENIZER_URL"
+    curl -fsSLk --proxy "${HTTP_PROXY:-http://10.201.6.100:1080}" -o "$TOKENIZER_FILE" "$TOKENIZER_URL"
 fi
 
-# Download the model if it doesn't exist
 if [ -f "$MODEL_FILE" ]; then
     echo "Model onnx already exists"
 else
     echo "Downloading model onnx..."
-    curl -L -o "$MODEL_FILE" "$MODEL_URL"
+    curl -fsSLk --proxy "${HTTP_PROXY:-http://10.201.6.100:1080}" -o "$MODEL_FILE" "$MODEL_URL"
 fi
 
 
