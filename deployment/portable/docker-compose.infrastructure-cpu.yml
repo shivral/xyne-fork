@@ -28,6 +28,12 @@ services:
         max-size: "50m"
         max-file: "6"
     environment:
+      - HTTP_PROXY=http://10.201.6.100:1080
+      - HTTPS_PROXY=http://10.201.6.100:1080
+      - http_proxy=http://10.201.6.100:1080
+      - https_proxy=http://10.201.6.100:1080
+      - NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,xyne-db,vespa,.svc,.local
+      - no_proxy=localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,xyne-db,vespa,.svc,.local
       - VESPA_CONFIGSERVER_JVMARGS=-Xms1g -Xmx2g -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/opt/vespa/var/crash
       - VESPA_CONFIGPROXY_JVMARGS=-Xms512m -Xmx1g -XX:+UseG1GC
       - VESPA_CONTAINER_JVMARGS=-Xms4g -Xmx8g -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/opt/vespa/var/crash -XX:MaxGCPauseMillis=200
