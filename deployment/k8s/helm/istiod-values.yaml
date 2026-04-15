@@ -19,6 +19,13 @@ global:
       limits:
         cpu: 500m
         memory: 256Mi
+    env:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,10.96.0.0/12,10.244.0.0/16,.svc,.svc.cluster.local"
+      no_proxy: "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,10.96.0.0/12,10.244.0.0/16,.svc,.svc.cluster.local"
   tracer:
     zipkin:
       address: ""
