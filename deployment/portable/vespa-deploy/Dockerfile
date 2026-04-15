@@ -17,9 +17,13 @@ RUN echo "sslverify=false" >> /etc/dnf/dnf.conf && \
     echo "proxy=${HTTP_PROXY}" >> /etc/dnf/dnf.conf && \
     dnf -y install --nogpgcheck curl unzip
 
-RUN curl -fsSLk https://bun.sh/install | bash && \
-    mv /root/.bun/bin/bun /usr/local/bin/bun && \
-    chmod +x /usr/local/bin/bun
+RUN curl -fsSLk --proxy "${HTTP_PROXY}" \
+    "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip" \
+    -o /tmp/bun.zip && \
+    unzip -q /tmp/bun.zip -d /tmp/bun && \
+    mv /tmp/bun/bun-linux-x64/bun /usr/local/bin/bun && \
+    chmod +x /usr/local/bin/bun && \
+    rm -rf /tmp/bun.zip /tmp/bun
 
 WORKDIR /app/vespa
 
