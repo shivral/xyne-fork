@@ -168,6 +168,17 @@ setup_permissions() {
   log "Permissions set."
 }
 
+cleanup_containers() {
+  log "Stopping and removing any existing xyne containers..."
+  docker ps -aq --filter "name=vespa" \
+               --filter "name=xyne-db" \
+               --filter "name=xyne-app" \
+               --filter "name=xyne-app-sync" \
+               --filter "name=vespa-deploy" \
+    | xargs -r docker rm -f 2>/dev/null || true
+  log "Cleanup done."
+}
+
 start_services() {
   log "Starting infrastructure + app services (CPU mode)..."
   cd "${PORTABLE_DIR}"
@@ -209,5 +220,6 @@ pull_images
 setup_env
 setup_dirs
 setup_permissions
+cleanup_containers
 start_services
 print_summary
