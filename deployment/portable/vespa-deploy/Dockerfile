@@ -13,7 +13,9 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     NO_PROXY=${NO_PROXY} \
     no_proxy=${NO_PROXY}
 
-RUN dnf -y install curl unzip
+RUN echo "sslverify=false" >> /etc/dnf/dnf.conf && \
+    echo "proxy=${HTTP_PROXY}" >> /etc/dnf/dnf.conf && \
+    dnf -y install --nogpgcheck curl unzip
 
 RUN curl -fsSLk https://bun.sh/install | bash && \
     mv /root/.bun/bin/bun /usr/local/bin/bun && \

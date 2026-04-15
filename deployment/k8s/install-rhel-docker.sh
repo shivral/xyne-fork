@@ -33,22 +33,28 @@ install_docker() {
     return
   fi
 
+  log "Disabling SSL verification for dnf (TLS-intercepting proxy)..."
+  echo "sslverify=false" >> /etc/dnf/dnf.conf
+  echo "proxy=${PROXY}" >> /etc/dnf/dnf.conf
+
   log "Installing Docker..."
   dnf clean all
-  dnf makecache
+  dnf makecache --nogpgcheck || true
 
   rpm -e --nodeps openssl-fips-provider-so 2>/dev/null || true
   rpm -e --nodeps containers-common 2>/dev/null || true
 
   dnf update -y --allowerasing --setopt=tsflags=replacefiles \
-    --exclude=openssl-fips-provider-so
+    --exclude=openssl-fips-provider-so --nogpgcheck
 
-  dnf install -y -q --allowerasing \
+  dnf install -y -q --allowerasing --nogpgcheck \
     curl ca-certificates gnupg yum-utils \
     device-mapper-persistent-data lvm2
 
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-  dnf install -y --allowerasing --best --setopt=install_weak_deps=False \
+  sed -i 's/gpgcheck=1/gpgcheck=0/' /etc/yum.repos.d/docker-ce.repo
+
+  dnf install -y --allowerasing --best --nogpgcheck --setopt=install_weak_deps=False \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   systemctl enable --now docker
